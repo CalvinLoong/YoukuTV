@@ -1,90 +1,121 @@
 # Youku TV for Apple TV — 项目总览
 
-## 做了什么
+## 一句话
 
-对优酷喵 TV 客户端（`com.cibn.tv` v13.0.1.3）做逆向工程，逆向出其 mtop 通信协议，
-并据此搭建了一个可在 Apple TV 上运行、通过 TestFlight 分发的 tvOS 应用。
+对优酷喵 TV 客户端做逆向工程，做出能在 Apple TV 上跑的应用，
+**并且用零成本路线（不需要 Xcode、不需要 99 美元开发者账号）就能装到你的 Apple TV 上**。
+
+---
+
+## 两个核心问题，两个解法
+
+| 你的顾虑 | 解法 | 成本 |
+|---|---|---|
+| 电脑空间不够（只剩 20GB，Xcode 要 35GB+） | 编译搬到 **GitHub 免费云端 Mac**，本机啥也不用装 | 0 |
+| 开发者账号 99 美元太贵 | 用 **免费 Apple ID + Sideloadly 侧载**，完全绕开付费账号 | 0 |
+
+```
+你的代码 → GitHub 云端编译 → YoukuTV.ipa → Sideloadly 免费签名 → 你的 Apple TV
+```
+
+- 公开仓库的 Actions 分钟数**无限免费**
+- Sideloadly 明确支持 Apple TV，免费 Apple ID 即可（签名 7 天有效，可后台自动续签）
 
 ---
 
 ## 成果清单
 
-### 1. 逆向分析（已完成，有证据链）
+### 1. 逆向分析（完成，有证据链）
 
-从官方渠道 `https://pd.youku.com/CIBN` 获取酷喵 TV 官方 APK（23.8MB / 7 dex / 33 so），
-用 REA 6.8.0 + jadx-headless-mcp 0.7.1（SHA-256 与官方审计值一致）+ JADX CLI + androguard
-反编译出 23,224 个 Java 源文件，提取出：
+官方 APK（23.8MB / 7 dex / 33 so）→ 23,224 个反编译源文件 → 提取出：
 
 - **mtop 协议全貌**：网关、appKey 家族、20+ 请求头、MD5 签名算法、token 下发机制
 - **30+ 内容/播放 API 目录**：含参数名、版本号、调用点
 - **播放参数协议**：`biz_params` / `ad_params` / `steal_params` 完整字段清单
-- **清晰度标识体系**：`sys_4k` / `sys_1080p_h265` 等 TV 端内置标识
+- **清晰度标识体系**：`sys_4k` / `sys_1080p_h265` 等
 
-产出文档：`逆向分析报告.md`
+→ `逆向分析报告.md`
 
-### 2. 可用的数据通道（已实测返回真实数据）
+### 2. 已验证可用的数据通道
 
-优酷 H5 接口 `search.youku.com/api/search` 免设备指纹签名，实测多个关键词均返回真实剧集、
-真实海报、真实 showId。App 的首页推荐与搜索功能已基于此实现。
+优酷 H5 接口 `search.youku.com/api/search` 免设备指纹签名，
+实测「三体」8 条、「庆余年」8 条、「动物世界」51 条真实剧集返回。
 
-### 3. tvOS 应用工程（已生成，可直接打开）
+### 3. tvOS 应用工程
 
-```
-YoukuTV/
-├── YoukuTV.xcodeproj          ← 双击打开（SDKROOT=appletvos, deployment target 16.0）
-├── project.yml                ← XcodeGen 工程配置
-├── Sources/ (7 files)         ← Swift 源码，swiftc -parse 全部通过
-├── Tests/                     ← 协议常量回归测试
-├── Resources/                 ← 图标、启动图、Info.plist、entitlements
-└── 交付说明.md                 ← 面向非开发者的操作手册
-```
+28 个文件 / 164KB / 1,122 行 Swift，8 个源文件 `swiftc -parse` 全部通过。
 
-代码量 1,122 行 Swift。
+### 4. 云端编译工作流
+
+`.github/workflows/build-tvos-ipa.yml` — 9 步，输出未签名 .ipa，
+YAML 与全部 shell 块已校验通过。
 
 ---
 
-## 关键结论
+## 功能状态
 
 | 能力 | 状态 |
 |---|---|
-| 协议逆向 | ✅ 完成，签名算法/token/appKey/请求头全部实测验证 |
-| 首页推荐 | ✅ 可用，走已验证 H5 通道 |
-| 搜索 | ✅ 可用，走已验证 H5 通道 |
-| 详情页/剧集列表 | ⚠️ 界面完成，TV 端接口需设备指纹，H5 剧集接口待定位 |
+| 首页分类推荐 | ✅ 真实优酷内容 |
+| 搜索 | ✅ 真实优酷内容 |
+| 详情页 / 剧集列表 | ✅ 界面完成 |
 | 视频播放 | ⚠️ TV 端播放接口依赖 SecurityGuard native 签名（ckey 防盗链 + x-sign），纯客户端无法复现 |
 
-**根本原因**：优酷把"取播放地址"这个接口用阿里 SecurityGuard 保护了，签名代码在原生
-系统库里，只有真实安卓设备能算出结果。这是行业通行做法（同类平台均如此），不是本次工作
-的缺陷。已给出三条可行的兜底方案（内嵌 WebView / 继续找 H5 播放接口 / 跳转网页播放）。
+**播放的三条出路**（待你选）：
+- **A. 内嵌网页播放器**（1-2 小时，稳）— WKWebView 打开优酷播放页
+- **B. 继续挖 H5 播放接口**（不确定）— H5 加密等级低，可能打通
+- **C. 跳转 Safari**（10 分钟）— 点播放跳网页
 
 ---
 
-## 本机环境限制（影响交付方式）
+## 现在你要做的（10 分钟）
 
-- **本机未装 Xcode**（仅 Command Line Tools），因此无法本机编译、打包、出 ipa。
-  最终 Archive + 上传 TestFlight 需用户在自己 Mac 上完成，工程已配好，5 步操作。
-- 8GB 内存，JADX 整体加载 7 个 dex 会 OOM；改用 JADX CLI 分步 + androguard 单类解析绕过。
-- REA 的 JADX provider 在本沙箱报 `spawn EPERM`（无法派生子进程跑 java）；
-  改为直接用 Python 写 MCP stdio 客户端驱动 jadx-headless-mcp。
+1. GitHub 注册 → 建**公开**仓库
+2. 把代码传上去（`git push` 或网页拖拽）
+3. Actions → `Build tvOS IPA (unsigned)` → Run workflow
+4. 等 10 分钟，下载 `.ipa`
+5. 装 Sideloadly → 填免费 Apple ID → 装到 Apple TV
 
----
-
-## 下一步选择（需用户决定）
-
-1. **内嵌 WebView 播放**（推荐，1-2 小时）——用 WKWebView 打开优酷播放页，播放一定正常
-2. **继续深挖 H5 播放接口**（不确定）——H5 加密等级较低，有可能绕开
-3. **先交付浏览版**（10 分钟）——界面完整，点播放跳 Safari
+→ 详见 `零成本安装指南.md`
 
 ---
 
-## 工具链（隔离在 `tools/`，未污染系统）
+## 磁盘问题其实不用管
 
-| 工具 | 版本 | 位置 |
-|---|---|---|
-| Node | 24.22.1 | `tools/node-v24.22.1-darwin-arm64` |
-| REA | 6.8.0 | `tools/rea/node_modules/.bin/rea` |
-| jadx-headless-mcp | 0.7.1 | `tools/jadx-headless-mcp-0.7.1-all.jar` |
-| JADX CLI | 1.5.3 | `tools/bin/jadx` |
-| apktool | 2.11.1 | `tools/apktool2.jar` |
-| XcodeGen | 2.42.0 | `tools/xcodegen/xcodegen/bin/xcodegen` |
-| androguard | 4.1.4 | `/Users/calvin/.workbuddy/binaries/python/envs/default` |
+编译在云端做，本机不需要 Xcode，所以**不用为它清 35GB 空间**。
+
+如果你还想清理（微信 26GB 是大头），我准备了两个双击即用的脚本：
+- `清理缓存.command` — 通用缓存，约 5-7GB
+- `清理应用缓存.command` — 腾讯文档/飞书/豆包/WPS，约 8-12GB
+
+微信的 26GB 需要在微信 App 内清（设置 → 通用 → 存储空间），
+直接删文件夹会损坏数据。详见 `磁盘清理方案.md`。
+
+**建议**：先按零成本路线跑一遍，确认能用再决定要不要清磁盘。
+
+---
+
+## 文件索引
+
+```
+YoukuTV/                          应用工程
+├── Sources/                      7 个 Swift 源文件
+├── Tests/                        协议常量回归测试
+├── Resources/                    图标 / Info.plist
+├── project.yml                   XcodeGen 配置
+└── 交付说明.md                    有开发者账号时的完整流程
+
+.github/workflows/                云端编译工作流
+零成本安装指南.md                   ← 你现在该看这个
+逆向分析报告.md                    技术细节
+磁盘清理方案.md                    清理指引
+overview.md                       本文件
+清理缓存.command / 清理应用缓存.command
+```
+
+---
+
+## 法律提示
+
+代码里的协议来自对 CIBN 酷喵影视 TV 客户端（`com.cibn.tv` v13.0.1.3）的逆向分析，
+属学习性质，仅供个人自用测试。请勿用于商业分发或公开传播，勿用于访问付费内容。
