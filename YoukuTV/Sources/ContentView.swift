@@ -16,12 +16,13 @@ struct ContentView: View {
                 case .detail(let item):
                     DetailView(item: item, model: model, player: player)
                 case .player(let item, let episode):
-                    PlayerView(item: item, episode: episode, player: player)
+                    PlayerView(item: item, episode: episode, player: player, model: model)
                 }
             }
             .navigationBarHidden(model.route != .home)
         }
         .task { await model.bootstrap() }
+        .onAppear { model.player = player }
     }
 
     // MARK: - 首页
@@ -198,21 +199,61 @@ struct DetailView: View {
     }
 }
 
-/// 播放页。tvOS 上用 VideoPlayer 承载 AVPlayer。
+/// 播放页。
+///
+/// 双通道策略：
+/// 1. 优先原生 AVPlayer —— 需要免签名的播放地址接口，目前尚未打通
+/// 2. 降级到内嵌 WKWebView —— 走优酷网页播放页，实测可正常播放
 struct PlayerView: View {
     let item: VideoItem
     let episode: Episode?
     @ObservedObject var player: PlayerController
+    @ObservedObject var model: AppViewModel
+
+    /// 当前使用的播放通道
+    @State private var useWebPlayer = false
+    @State private var webError: String?
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if let error = player.errorMessage {
-                ErrorView(message: error)
+            if useWebPlayer, let url = YoukuWebPage.playURL(showId: item.showId) {
+                WebPlayerView(url: url) { message in
+                    webError = message
+                }
+                .ignoresSafeArea()
+            } else if let error = player.errorMessage {
+                VStack(spacing: 24) {
+                    ErrorView(message: error)
+                    // 降级到网页播放
+                    Button("用网页播放器打开") {
+                        useWebPlayer = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Palette.accent)
+                }
             } else {
                 VideoPlayer(player: player.player)
                     .ignoresSafeArea()
+            }
+
+            if let webError {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Text(webError)
+                            .font(.system(size: 15))
+                            .foregroundStyle(Palette.accentWarm)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(Color.black.opacity(0.75))
+                            .clipShape(Capsule())
+                            .padding(.trailing, 60)
+                            .padding(.top, 40)
+                    }
+                    Spacer()
+                }
             }
 
             VStack {
@@ -229,10 +270,34 @@ struct PlayerView: View {
                     }
                     Spacer()
                     if player.isLoading { ProgressView().controlSize(.large) }
+
+                    // 播放通道切换
+                    Button {
+                        useWebPlayer.toggle()
+                    } label: {
+                        Label(
+                            useWebPlayer ? "原生播放器" : "网页播放器",
+                            systemImage: useWebPlayer ? "tv.badge.wifi" : "safari.fill"
+                        )
+                        .font(.system(size: 15, weight: .medium))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 9)
+                        .background(Color.white.opacity(0.16))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white)
                 }
                 .padding(.horizontal, 60)
                 .padding(.top, 40)
                 Spacer()
+            }
+        }
+        .task {
+            // 启动时先尝试原生播放；拿不到免签名地址则自动降级到网页播放
+            await model.resolvePlayback(for: item, episode: episode)
+            if player.errorMessage != nil {
+                useWebPlayer = true
             }
         }
     }

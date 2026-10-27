@@ -47,4 +47,18 @@ final class YoukuMTopClientTests: XCTestCase {
         XCTAssertEqual(PlaybackResolver.Quality.fourK.playerToken, "sys_4k")
         XCTAssertEqual(PlaybackResolver.Quality.hd1080p.playerToken, "sys_1080p_h265")
     }
+
+    func testWebPlayURLFormat() {
+        // 实测: list.youku.com/show/id_{showId}.html 会 302 到 v.youku.com/v_show/id_{vid}.html?s={showId}
+        let url = YoukuWebPage.playURL(showId: "9bbc2c96790d11e4b522")
+        XCTAssertEqual(url?.absoluteString,
+                       "https://list.youku.com/show/id_9bbc2c96790d11e4b522.html")
+        XCTAssertNotNil(YoukuWebPage.searchURL(keyword: "三体"))
+    }
+
+    func testDefaultPlaybackHeadersIncludeReferer() {
+        let headers = PlaybackResolver.defaultHeaders()
+        XCTAssertEqual(headers["Referer"], "https://www.youku.com/")
+        XCTAssertNotNil(headers["User-Agent"])
+    }
 }

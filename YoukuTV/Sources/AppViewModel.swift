@@ -33,6 +33,12 @@ final class AppViewModel: ObservableObject {
     private let web = YoukuWebClient()
     private let mtop = YoukuMTopClient()
 
+    /// 播放器引用。由 ContentView 注入，用于在解析到播放地址后直接起播。
+    ///
+    /// PlayerController 本身是 @MainActor 隔离的，这里由 AppViewModel（同样在
+    /// MainActor 上）持有，不会产生跨 actor 访问。
+    @MainActor weak var player: PlayerController?
+
     // MARK: - 启动
 
     /// 加载首页推荐。
@@ -102,14 +108,20 @@ final class AppViewModel: ObservableObject {
         route = .player(item, episode)
     }
 
-    /// 解析播放地址。
-    func resolvePlayback(for item: VideoItem, episode: Episode?) async -> PlaybackResolver.PlaybackInfo? {
+    /// 解析播放地址并交给播放器。
+    ///
+    /// TV 端播放接口依赖 SecurityGuard native 签名，成功率低；
+    /// 失败时播放页会自动降级到内嵌网页播放器。
+    func resolvePlayback(for item: VideoItem, episode: Episode?) async {
         do {
             let data = try await mtop.playInfo(showId: item.showId, videoId: episode?.videoId ?? item.videoId)
-            return PlaybackResolver.resolve(from: data)
+            guard let info = PlaybackResolver.resolve(from: data) else {
+                throw YoukuError.decodingFailed("未找到可播放地址")
+            }
+            player?.play(info, title: episode?.title ?? item.title)
         } catch {
-            errorMessage = (error as? YoukuError)?.errorDescription ?? error.localizedDescription
-            return nil
+            // 不在此处弹错，播放页会切换到网页播放器
+            player?.errorMessage = (error as? YoukuError)?.errorDescription ?? error.localizedDescription
         }
     }
 }

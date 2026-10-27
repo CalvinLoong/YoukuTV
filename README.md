@@ -13,7 +13,7 @@
 - 首页分类推荐（真实优酷内容）
 - 搜索（真实优酷内容）
 - 详情页与剧集列表
-- 播放器（AVPlayer + HLS）
+- 视频播放（双通道：原生 AVPlayer 优先，取不到免签名地址时自动降级到内嵌 WKWebView）
 
 ## 免付费安装路线（不需要 Xcode、不需要开发者账号）
 
@@ -66,7 +66,8 @@ YoukuTV/
 │   ├── AppViewModel.swift      状态机与数据调度
 │   ├── YoukuWebClient.swift    优酷 H5 数据接口
 │   ├── YoukuMTopClient.swift   优酷 mtop 协议客户端（逆向成果）
-│   └── PlayerController.swift  AVPlayer 播放控制
+│   ├── PlayerController.swift  AVPlayer 播放控制
+│   └── WebPlayerView.swift     内嵌网页播放器（WKWebView）
 ├── Tests/                      协议常量回归测试
 ├── Resources/                  图标、Info.plist
 └── project.yml                 XcodeGen 工程配置
