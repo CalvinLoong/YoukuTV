@@ -65,8 +65,9 @@ struct PlaybackResolver {
         }
 
         // 2) 兜底：遍历 data 下的所有 m3u8 字符串
+        //    注意：地址形如 playlist/m3u8?vid=...，m3u8 后可能带查询参数
         func findM3U8(_ any: Any) -> String? {
-            if let s = any as? String, s.contains(".m3u8") { return s }
+            if let s = any as? String, s.contains("m3u8") { return s }
             if let dict = any as? [String: Any] {
                 for (_, v) in dict { if let r = findM3U8(v) { return r } }
             }
