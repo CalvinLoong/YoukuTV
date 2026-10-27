@@ -1,0 +1,151 @@
+name: Build tvOS IPA (unsigned)
+
+# 在 GitHub 免费的 macOS runner 上编译 tvOS app，产出未签名 .ipa。
+# 之后用 Sideloadly + 免费 Apple ID 侧载到 Apple TV，无需 Xcode、无需付费开发者账号。
+#
+# 触发方式：Actions 标签页 → Build tvOS IPA (unsigned) → Run workflow
+# 或命令行：gh workflow run build-tvos-ipa.yml
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: 'Bundle Identifier（需与 Sideloadly 侧载时一致）'
+        required: false
+        default: 'com.workbuddy.youkutv'
+      app_name:
+        description: 'App 显示名'
+        required: false
+        default: 'YoukuTV'
+      export_method:
+        description: '导出方式'
+        required: false
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - app-store-connect
+
+jobs:
+  build:
+    name: Build unsigned tvOS IPA
+    # macos-14 已进入弃用期（2026-11-02 完全停用），用 macos-15 更稳。
+    # 若该镜像暂不可用，可改回 macos-14。
+    runs-on: macos-15
+
+    env:
+      BUNDLE_ID: ${{ inputs.bundle_id || 'com.workbuddy.youkutv' }}
+      APP_NAME: ${{ inputs.app_name || 'YoukuTV' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        # 自动挑选带 tvOS SDK 的 Xcode，避免写死版本号
+        run: |
+          set -e
+          for V in 16.2 16.1 16 15.4 15.3; do
+            if [ -d "/Applications/Xcode_${V}.app" ]; then
+              echo "Using Xcode ${V}"
+              sudo xcode-select -s "/Applications/Xcode_${V}.app"
+              break
+            fi
+          done
+          xcodebuild -version
+          echo "--- tvOS SDKs ---"
+          xcodebuild -showsdks | grep -i appletvos || {
+            echo "::error::该 runner 没有 tvOS SDK"; exit 1; }
+
+      - name: Install XcodeGen
+        run: |
+          set -e
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Generate Xcode project
+        working-directory: YoukuTV
+        run: |
+          xcodegen generate --spec project.yml
+          echo "--- generated ---"
+          ls -la
+
+      - name: Resolve tvOS SDK path
+        id: sdk
+        run: |
+          SDK_PATH=$(xcrun --sdk appletvos --show-sdk-path)
+          echo "path=$SDK_PATH" >> $GITHUB_OUTPUT
+          echo "SDK: $SDK_PATH"
+
+      - name: Build app (unsigned)
+        working-directory: YoukuTV
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project YoukuTV.xcodeproj \
+            -scheme YoukuTV \
+            -configuration Debug \
+            -sdk appletvos \
+            -destination 'generic/platform=tvOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_BITCODE=NO \
+            ONLY_ACTIVE_ARCH=NO \
+            ARCHS=arm64 \
+            build 2>&1 | tee build.log | tail -60
+
+      - name: Package .ipa (unsigned)
+        working-directory: YoukuTV
+        run: |
+          set -e
+          APP_PATH=$(find build/DerivedData/Build/Products -maxdepth 3 -name "*.app" | head -1)
+          echo "APP: $APP_PATH"
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::没有找到 .app 产物，编译日志末尾："
+            tail -40 build.log || true
+            exit 1
+          fi
+
+          # 组装 Payload 目录
+          rm -rf build/Payload build/YoukuTV.ipa
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/
+          # 改名为与 scheme 同名，避免 Sideloadly 识别异常
+          mv "build/Payload/$(basename "$APP_PATH")" "build/Payload/${APP_NAME}.app"
+
+          cd build
+          zip -qry "YoukuTV-unsigned.ipa" Payload
+          cd ..
+          ls -la build/*.ipa
+          echo "::notice::IPA 构建完成"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: YoukuTV-tvos-ipa
+          path: YoukuTV/build/YoukuTV-unsigned.ipa
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          {
+            echo "## ✅ tvOS IPA 构建完成"
+            echo ""
+            echo "**Bundle ID**: \`$BUNDLE_ID\`"
+            echo ""
+            echo "### 安装步骤"
+            echo "1. 下载下方 Artifacts 里的 \`YoukuTV-tvos-ipa\`"
+            echo "2. 解压得到 \`YoukuTV-unsigned.ipa\`"
+            echo "3. 电脑上装 [Sideloadly](https://sideloadly.io)（免费，支持 Apple TV）"
+            echo "4. Apple TV 和电脑连同一个 WiFi"
+            echo "5. Apple TV → 设置 → 遥控器与设备 → 远程 App 与设备，记下配对码"
+            echo "6. Sideloadly 里拖入 ipa → 选你的 Apple TV → 填免费 Apple ID → Start"
+            echo "7. Apple TV → 设置 → 通用 → 隐私与安全性 → App 安装，信任开发者"
+            echo ""
+            echo "> 免费 Apple ID 签名有效期 7 天。开启 Sideloadly 的 Auto-Refresh 可自动续签。"
+          } >> $GITHUB_STEP_SUMMARY

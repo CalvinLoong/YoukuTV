@@ -1,0 +1,35 @@
+# 构建产物
+YoukuTV/build/
+DerivedData/
+*.ipa
+*.dSYM/
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+YoukuTV/YoukuTV.xcodeproj/
+
+# 逆向分析中间产物（体积大，不入库）
+apk/
+jadxout/
+apkres/
+tools/
+evidence/
+*.dex
+*.apk
+*.so
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# macOS
+.DS_Store
+
+# 逆向分析临时脚本
+ymt.py
+extract.py
+extract2.py
+jadx_mcp.py
