@@ -43,7 +43,7 @@ jobs:
     # 「任一镜像可用」要用 matrix 实现，但 matrix 会跑 3 个任务。
     # 免费账户并发额度有限，这里固定用一个镜像；
     # 若长期排不上，可在触发时改这一行的标签。
-    runs-on: macos-15
+    runs-on: macos-14
 
     env:
       BUNDLE_ID: ${{ inputs.bundle_id || 'com.workbuddy.youkutv' }}
