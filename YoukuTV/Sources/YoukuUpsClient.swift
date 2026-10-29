@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// 优酷播放地址（ups）接口客户端。
 ///
@@ -175,7 +176,8 @@ actor YoukuUpsClient {
         request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
         applyCookies(to: &request)
 
-        let (response, body) = try await session.data(for: request)
+        // URLSession.data(for:) 返回 (Data, URLResponse) —— 顺序不能反
+        let (body, response) = try await session.data(for: request)
         captureCookies(from: response)
 
         guard let http = response as? HTTPURLResponse else {
@@ -288,7 +290,12 @@ actor YoukuUpsClient {
         var request = URLRequest(url: components.url!)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         applyCookies(to: &request)
-        let (_, _) = try? await session.data(for: request)
+        // 服务端在响应头里下发 _m_h5_tk，必须把 cookies 收走，
+        // 否则第二次请求算不出正确的 sign（token 一直为空）。
+        // 注意 try? 会让返回值变成可选元组，不能直接解构。
+        if let (_, response) = try? await session.data(for: request) {
+            captureCookies(from: response)
+        }
         if token.isEmpty {
             throw YoukuError.tokenUnavailable
         }
