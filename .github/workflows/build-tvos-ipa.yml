@@ -58,6 +58,27 @@ jobs:
           xcodebuild -showsdks | grep -i appletvos || {
             echo "::error::该 runner 没有 tvOS SDK"; exit 1; }
 
+      - name: Diagnose tvOS frameworks
+        # 打印 tvOS SDK 里可用的框架，避免以后再出现 "no such module" 时靠猜。
+        # 重点：tvOS 自 9.0 起完全没有 WebKit（Apple 官方明确说明），
+        # 所以任何 import WebKit 的代码在 tvOS 上都必然编译失败。
+        run: |
+          set -e
+          SDK_PATH=$(xcrun --sdk appletvos --show-sdk-path)
+          echo "SDK: $SDK_PATH"
+          echo "--- 可用框架（前 40 个）---"
+          ls "$SDK_PATH/System/Library/Frameworks" | head -40
+          echo "--- 关键框架检查 ---"
+          for FW in AVKit AVFoundation WebKit JavaScriptCore SwiftUI; do
+            if [ -d "$SDK_PATH/System/Library/Frameworks/$FW.framework" ]; then
+              echo "  ✓ $FW"
+            else
+              echo "  ✗ $FW  (不存在于 tvOS SDK)"
+            fi
+          done
+          echo "--- VideoPlayer 的 Swift module ---"
+          ls "$SDK_PATH/System/Library/Frameworks/AVKit.framework/Modules" 2>/dev/null || echo "  (AVKit 无 Modules 目录)"
+
       - name: Install XcodeGen
         run: |
           set -e
