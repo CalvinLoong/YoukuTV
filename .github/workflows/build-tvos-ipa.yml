@@ -36,9 +36,16 @@ on:
           - macos-14
           - macos-13
 
+# 同一时间只跑一个构建，避免免费账户的并发额度被占满导致长时间排队
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build unsigned tvOS IPA
+    # 免费账户的 macOS runner 排队可能很久，超时后自动失败重来
+    timeout-minutes: 45
     # 免费账户的 macOS runner 供给紧张，排队几十分钟到数小时是常态。
     #
     # 列出多个镜像让 GitHub 自行挑有容量的。若排队太久，
