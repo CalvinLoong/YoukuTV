@@ -61,14 +61,30 @@ YAML 与全部 shell 块已校验通过。
 | 详情页 / 剧集列表 | ✅ 界面完成 |
 | 视频播放 | ✅ 已实现（ups 接口直取 + 多清晰度） |
 
-**播放链路**：App 直接调用优酷 ups 接口取 m3u8，交给原生 AVPlayer 播放。
+**播放链路**：全程只走 JSON 接口，不访问任何网页。
 
+```
+搜索  search.youku.com/api/search   → vid + 权益标签 + 集数
+      ↓
+地址  un-acs.youku.com ups          → m3u8（含主播放列表 → 自动码率）
+      ↓
+播放  AVPlayer（原生，支持多清晰度切换）
+```
+
+- `YoukuWebClient` — 搜索接口（JSON，不受风控影响）
 - `YoukuUpsClient` — mtop md5 签名 + ups 接口，解析 JSONP 响应
 - 内置凭据（ckey + utid）— 实测**不绑定 vid**，一组凭据可播任意视频，有效期 > 2 天
-- 播放页提供清晰度切换（主播放列表 / 1080P / 720P / 标清）
+- `YoukuEpisodeClient` — 选集列表（**可选补充**，走 HTML 页面，可能被优酷风控；
+  拿不到也不影响播放）
 
-> ⚠️ tvOS **没有 WebKit**（Apple 官方：tvOS has no WKWebView at all），
-> 所以不存在"内嵌网页播放器"这条路径。早期版本基于 WKWebView 的桥接方案已废弃。
+**两个关键的平台约束**（都实测确认）：
+1. tvOS **没有 WebKit**（Apple 官方：tvOS has no WKWebView at all），
+   所以「内嵌网页播放器」这条路不存在
+2. 优酷对 **HTML 页面有阿里 x5 风控**（返回验证码页，真实浏览器同样被拦），
+   而 tvOS 无 JS 引擎无法过验证码 → 播放链路必须完全避开 HTML
+
+**权益边界**：VIP/付费内容接口返回 SUCCESS 但不给地址，
+本项目**有意不做**会员校验绕过，App 会明确提示原因。
 
 **凭据失效怎么办**：双击 `更新ckey.command` 重新生成（约 1 分钟），
 或跑 `tools/校验凭据.py` 检查当前是否还有效。
