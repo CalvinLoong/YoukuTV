@@ -17,32 +17,55 @@ on:
         description: 'App 显示名'
         required: false
         default: 'YoukuTV'
-      export_method:
-        description: '导出方式'
+      runner_label:
+        description: '构建机标签（留空 = 自动四路并行抢机）'
         required: false
-        default: 'development'
-        type: choice
-        options:
-          - development
-          - app-store-connect
+        default: ''
 
 # 同一时间只跑一个构建，避免免费账户的并发额度被占满导致长时间排队
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
+  # 先在极快的 ubuntu runner 上算出要用哪些 macOS 构建机标签。
+  # （GitHub 的 macOS 队列很拥堵，所以要一次性多路并行去抢。）
+  plan:
+    name: Choose runner labels
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        env:
+          REQUESTED: ${{ inputs.runner_label }}
+        run: |
+          set -e
+          if [ -z "$REQUESTED" ]; then
+            MATRIX='[{"label":"macos-15-intel","os":"macos-15-intel"},{"label":"macos-26-intel","os":"macos-26-intel"},{"label":"macos-latest","os":"macos-latest"},{"label":"macos-15","os":"macos-15"}]'
+          else
+            MATRIX="[{\"label\":\"$REQUESTED\",\"os\":\"$REQUESTED\"}]"
+          fi
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "Chosen: $MATRIX"
+
   build:
-    name: Build unsigned tvOS IPA
-    # 免费账户的 macOS runner 排队可能很久，超时后自动失败重来
-    timeout-minutes: 45
+    name: Build unsigned tvOS IPA (${{ matrix.label }})
+    needs: plan
+    # 排队 + 编译总共给 50 分钟；超时会自动失败，可在 Actions 页面点 Re-run。
+    timeout-minutes: 50
     # 重要：runs-on 的**数组**语义是 AND（要求 runner 同时具备所有标签），
-    # 写数组会让任务永远排队，所以这里只用单个标签。
+    # 所以这里用 matrix 逐个标签并行尝试，而不是写数组。
     #
-    # 用 macos-latest：指向当前 GA 的 macOS 26 Arm64 镜像，
-    # 供给通常比固定版本充裕（macos-14 已标记 deprecated）。
-    # 若长期排不上，可改成 macos-15 或 macos-13 试试。
-    runs-on: macos-latest
+    # 为什么多路并行：GitHub 的 macOS runner 分两个独立的供给池——
+    #   · arm64 池（macos-latest / macos-15 / macos-26）：M1 机器，需求大，
+    #     官方公告过 "capacity constraints"，实测经常排队 15 分钟拿不到机器。
+    #   · intel 池（macos-15-intel / macos-26-intel）：x86 机器，供给相对宽松。
+    # 四路同时抢，谁先拿到机器谁的产物生效，其余自动跳过。
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
 
     env:
       BUNDLE_ID: ${{ inputs.bundle_id || 'com.workbuddy.youkutv' }}
@@ -55,18 +78,25 @@ jobs:
       - name: Select Xcode
         # 自动挑选带 tvOS SDK 的 Xcode，避免写死版本号。
         # 用 DEVELOPER_DIR 而不是 xcode-select：免 sudo、切换更快、更可靠。
+        # 策略：扫描 /Applications 下所有 Xcode_*.app，按版本号从新到旧取第一个。
         run: |
           set -e
+          echo "Runner image: $RUNNER_OS / $RUNNER_ARCH / $ImageOS / $ImageVersion"
+          # 按版本号从新到旧列出所有 Xcode（macOS 自带 sort 不支持 -V，用 awk 排）
+          CANDIDATES=$(ls -d /Applications/Xcode_*.app 2>/dev/null | awk '{v=$0; sub(/.*Xcode_/,"",v); sub(/\.app$/,"",v); split(v,a,"."); printf "%03d%03d\t%s\n", a[1]+0, a[2]+0, $0}' | sort -rn | cut -f2-)
+          echo "候选 Xcode:"
+          echo "$CANDIDATES" | sed 's/^/  /'
           SELECTED=""
-          for V in 26.4 26.3 26.2 26.1 26.0 16.2 16.1 16 15.4 15.3 15.2; do
-            if [ -d "/Applications/Xcode_${V}.app" ]; then
-              SELECTED="/Applications/Xcode_${V}.app"
-              echo "Using Xcode ${V}"
+          for DIR in $CANDIDATES; do
+            if DEVELOPER_DIR="$DIR" xcodebuild -showsdks 2>/dev/null | grep -qi appletvos; then
+              SELECTED="$DIR"
+              echo "Using $DIR (tvOS SDK present)"
               break
             fi
+            echo "skip $DIR (no tvOS SDK)"
           done
           if [ -z "$SELECTED" ]; then
-            echo "::error::找不到可用的 Xcode"
+            echo "::error::找不到带 tvOS SDK 的 Xcode"
             ls -d /Applications/Xcode*.app || true
             exit 1
           fi
@@ -74,10 +104,7 @@ jobs:
           echo "DEVELOPER_DIR=$SELECTED" >> "$GITHUB_STEP_SUMMARY"
           xcodebuild -version
           echo "--- tvOS SDKs ---"
-          xcodebuild -showsdks | grep -i appletvos || {
-            echo "::error::该 runner 没有 tvOS SDK"
-            xcodebuild -showsdks
-            exit 1; }
+          xcodebuild -showsdks | grep -i appletvos
 
       - name: Diagnose tvOS frameworks
         # 打印 tvOS SDK 里可用的框架，避免以后再出现 "no such module" 时靠猜。
@@ -87,8 +114,6 @@ jobs:
           set -e
           SDK_PATH=$(xcrun --sdk appletvos --show-sdk-path)
           echo "SDK: $SDK_PATH"
-          echo "--- 可用框架（前 40 个）---"
-          ls "$SDK_PATH/System/Library/Frameworks" | head -40
           echo "--- 关键框架检查 ---"
           for FW in AVKit AVFoundation WebKit JavaScriptCore SwiftUI; do
             if [ -d "$SDK_PATH/System/Library/Frameworks/$FW.framework" ]; then
@@ -97,15 +122,32 @@ jobs:
               echo "  ✗ $FW  (不存在于 tvOS SDK)"
             fi
           done
-          echo "--- VideoPlayer 的 Swift module ---"
-          ls "$SDK_PATH/System/Library/Frameworks/AVKit.framework/Modules" 2>/dev/null || echo "  (AVKit 无 Modules 目录)"
 
       - name: Install XcodeGen
+        # 优先用 Homebrew；brew 元数据过期或网络抖动导致失败时，
+        # 直接下载官方预编译二进制兜底（更稳、更快）。
         run: |
           set -e
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
+          if command -v xcodegen >/dev/null 2>&1; then
+            xcodegen --version
+            exit 0
           fi
+          echo "▸ 尝试 Homebrew 安装 xcodegen"
+          if brew install xcodegen; then
+            xcodegen --version
+            exit 0
+          fi
+          echo "▸ Homebrew 失败，改用官方预编译二进制"
+          VER=$(curl -fsSL https://api.github.com/repos/yonaskolb/XcodeGen/releases/latest \
+                | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+          echo "Latest XcodeGen: $VER"
+          curl -fsSL -o /tmp/xcodegen.zip \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${VER}/xcodegen.zip"
+          unzip -q -o /tmp/xcodegen.zip -d /tmp/xcodegen-bin
+          BIN=$(find /tmp/xcodegen-bin -name xcodegen -type f | head -1)
+          chmod +x "$BIN"
+          sudo mkdir -p /usr/local/bin
+          sudo mv "$BIN" /usr/local/bin/xcodegen
           xcodegen --version
 
       - name: Generate Xcode project
@@ -114,13 +156,6 @@ jobs:
           xcodegen generate --spec project.yml
           echo "--- generated ---"
           ls -la
-
-      - name: Resolve tvOS SDK path
-        id: sdk
-        run: |
-          SDK_PATH=$(xcrun --sdk appletvos --show-sdk-path)
-          echo "path=$SDK_PATH" >> $GITHUB_OUTPUT
-          echo "SDK: $SDK_PATH"
 
       - name: Build app (unsigned)
         working-directory: YoukuTV
@@ -139,7 +174,7 @@ jobs:
             ENABLE_BITCODE=NO \
             ONLY_ACTIVE_ARCH=NO \
             ARCHS=arm64 \
-            build 2>&1 | tee build.log | tail -60
+            build 2>&1 | tee build.log | tail -80
 
       - name: Package .ipa (unsigned)
         working-directory: YoukuTV
@@ -149,7 +184,7 @@ jobs:
           echo "APP: $APP_PATH"
           if [ -z "$APP_PATH" ]; then
             echo "::error::没有找到 .app 产物，编译日志末尾："
-            tail -40 build.log || true
+            tail -60 build.log || true
             exit 1
           fi
 
@@ -169,20 +204,22 @@ jobs:
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: YoukuTV-tvos-ipa
+          name: YoukuTV-tvos-ipa-${{ matrix.label }}
           path: YoukuTV/build/YoukuTV-unsigned.ipa
           retention-days: 30
           if-no-files-found: error
 
       - name: Summary
+        if: always()
         run: |
           {
-            echo "## ✅ tvOS IPA 构建完成"
+            echo "## 构建结果：${{ matrix.label }}"
             echo ""
             echo "**Bundle ID**: \`$BUNDLE_ID\`"
+            echo "**Runner**: \`${{ matrix.os }}\`"
             echo ""
             echo "### 安装步骤"
-            echo "1. 下载下方 Artifacts 里的 \`YoukuTV-tvos-ipa\`"
+            echo "1. 下载下方 Artifacts 里的 \`YoukuTV-tvos-ipa-${{ matrix.label }}\`"
             echo "2. 解压得到 \`YoukuTV-unsigned.ipa\`"
             echo "3. 电脑上装 [Sideloadly](https://sideloadly.io)（免费，支持 Apple TV）"
             echo "4. Apple TV 和电脑连同一个 WiFi"
@@ -192,3 +229,42 @@ jobs:
             echo ""
             echo "> 免费 Apple ID 签名有效期 7 天。开启 Sideloadly 的 Auto-Refresh 可自动续签。"
           } >> $GITHUB_STEP_SUMMARY
+
+  # 四路里只要有一路拿到机器并编译成功，这里就把它收敛成统一的产物名。
+  finalize:
+    name: Publish IPA artifact
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all IPA artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: YoukuTV-tvos-ipa-*
+          path: downloaded
+          merge-multiple: true
+
+      - name: Publish
+        run: |
+          set -e
+          IPA=$(find downloaded -name "*.ipa" | head -1)
+          if [ -z "$IPA" ]; then
+            echo "::error::四路构建都没有产出 ipa"
+            ls -R downloaded || true
+            exit 1
+          fi
+          cp "$IPA" YoukuTV-unsigned.ipa
+          ls -la YoukuTV-unsigned.ipa
+          {
+            echo "## ✅ 拿到 tvOS IPA"
+            echo ""
+            echo "下载下方 Artifacts 里的 **YoukuTV-tvos-ipa**（内含 YoukuTV-unsigned.ipa）。"
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload final IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: YoukuTV-tvos-ipa
+          path: YoukuTV-unsigned.ipa
+          retention-days: 30
+          if-no-files-found: error
