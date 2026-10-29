@@ -1,10 +1,10 @@
-name: Probe Runner
+name: Probe2
 
 on:
   workflow_dispatch:
 
 jobs:
-  probe:
-    runs-on: macos-15
+  p:
+    runs-on: macos-latest
     steps:
-      - run: echo "RUNNER_OK $(date)"
+      - run: echo OK
