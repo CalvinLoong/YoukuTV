@@ -20,9 +20,9 @@ final class PlayerController: ObservableObject {
     }
 
     deinit {
-        if let obs = statusObservation {
-            player.currentItem?.removeObserver(obs)
-        }
+        // NSKeyValueObservation 需要 invalidate()，
+        // 直接调用 removeObserver(_:) 在 Swift 里签名不匹配（需要 keyPath）。
+        statusObservation?.invalidate()
     }
 
     /// 播放一个已解析的播放源。
@@ -31,15 +31,21 @@ final class PlayerController: ObservableObject {
         currentTitle = title
         isLoading = true
 
-        // 本地主播放列表（落盘的 m3u8）不需要 HTTP 头，
-        // 实测优酷 CDN 也不校验 Referer/UA。
-        let options: [String: Any] = info.url.isFileURL
-            ? [:]
-            : [AVURLAssetHTTPHeaderFieldsKey: info.headers]
+        // 本地主播放列表（落盘的 m3u8）不需要任何请求头。
+        // 远端地址设置 User-Agent —— 实测优酷 CDN 不校验 Referer/UA，
+        // 但带上更稳妥（部分 CDN 会拒绝空 UA 的请求）。
+        var options: [String: Any] = [:]
+        if !info.url.isFileURL,
+           let ua = info.headers["User-Agent"] {
+            options[AVURLAssetHTTPUserAgentKey] = ua
+        }
 
         let asset = AVURLAsset(url: info.url, options: options)
         let item = AVPlayerItem(asset: asset)
         player.replaceCurrentItem(with: item)
+
+        // 换 item 前先注销旧的观察者，避免回调打到已废弃的 item 上
+        statusObservation?.invalidate()
 
         // 观察播放状态：就绪则起播，失败则报错
         statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in

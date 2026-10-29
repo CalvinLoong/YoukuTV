@@ -145,7 +145,8 @@ actor YoukuWebClient {
     ]
 
     /// 抓取一个 JSON 接口。
-    private func fetch(_ url: URL) async throws -> Data {        let (data, response) = try await session.data(from: url)
+    private func fetch(_ url: URL) async throws -> Data {
+        let (data, response) = try await session.data(from: url)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw YoukuError.httpStatus(http.statusCode)
         }
