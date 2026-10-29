@@ -1,87 +1,146 @@
-# YoukuTV for Apple TV
+# YoukuTV —— Apple TV 上的优酷客户端
 
-一个 Apple TV（tvOS）客户端，用优酷的公开接口浏览与搜索节目。
+给 Apple TV 做的优酷客户端，**不需要 Xcode、不需要 99 美元开发者账号**。
 
-> **学习性质的反向工程项目**。代码里的接口协议来自对 CIBN 酷喵影视 TV 客户端
-> （`com.cibn.tv` v13.0.1.3）的逆向分析，仅供个人学习与自用测试。
-> 请勿用于商业分发或公开传播，勿用于访问付费内容。
+```
+代码 → GitHub 云端编译 → .ipa → Sideloadly 免费签名 → Apple TV
+```
 
 ---
 
-## 功能
+## 现在什么状态
 
-- 首页分类推荐（真实优酷内容）
-- 搜索（真实优酷内容）
-- 详情页与剧集列表
-- 视频播放（双通道：原生 AVPlayer 优先，取不到免签名地址时自动降级到内嵌 WKWebView）
+| 功能 | 状态 |
+|---|---|
+| 首页分类推荐 | ✅ 真实优酷内容 |
+| 搜索 | ✅ 真实优酷内容 |
+| 详情页 / 剧集列表 | ✅ 界面完成 |
+| 视频播放 | ✅ 原生 AVPlayer，多清晰度 + 自动码率 |
 
-## 免付费安装路线（不需要 Xcode、不需要开发者账号）
+**代码 2403 行，9 个 Swift 文件，本地编译零错误零警告。**
+播放链路已用真实网络数据端到端验证通过。
 
-本项目提供 GitHub Actions 工作流，在 GitHub 免费的 macOS runner 上编译出
-**未签名** `.ipa`，再用 Sideloadly + 免费 Apple ID 侧载到 Apple TV。
+---
+
+## 三步装上
+
+### 1. 触发云端构建
+
+打开 <https://github.com/CalvinLoong/YoukuTV/actions>
+→ 选 **Build tvOS IPA (unsigned)** → **Run workflow** → 等约 10 分钟
+
+> 免费账户的 macOS runner 供给紧张，排队几十分钟是常态。
+> 排太久就取消重新触发，或用仓库里的 CircleCI 备用配置。
+
+### 2. 下载安装包
+
+构建完成后，页面底部 **Artifacts** 下载 `YoukuTV-tvos-ipa`，
+解压得到 `YoukuTV-unsigned.ipa`。
+
+### 3. 装进 Apple TV
+
+1. 电脑装 [Sideloadly](https://sideloadly.io)（免费，支持 Apple TV）
+2. Apple TV 和电脑连同一个 WiFi
+3. Apple TV → **设置 → 遥控器与设备 → 远程 App 与设备**，记下配对码
+4. Sideloadly 里拖入 ipa → 选你的 Apple TV → 填免费 Apple ID → **Start**
+5. Apple TV → **设置 → 通用 → 隐私与安全性 → App 安装** → 信任开发者
+
+> 免费 Apple ID 签名 **7 天过期**。开启 Sideloadly 的 `Auto-Refresh` 可自动续签，
+> 否则过期后重新装一次（数据和登录状态不丢）。
+
+---
+
+## 播放是怎么解决的
+
+优酷给"取播放地址"加了设备级加密（ckey 防盗链），由浏览器安全组件算出。
+tvOS 既**没有浏览器引擎**（Apple 官方：tvOS has no WKWebView at all），
+优酷的 HTML 页面又有阿里 x5 风控，所以"抓网页"这条路在 tvOS 上走不通。
+
+最终方案是**全程只走 JSON 接口**：
 
 ```
-推送代码 → GitHub Actions 编译 → 下载 .ipa → Sideloadly 侧载 → Apple TV 上运行
+搜索  search.youku.com/api/search   →  vid + 权益标签 + 集数
+      ↓
+地址  un-acs.youku.com ups          →  m3u8
+      ↓
+播放  AVPlayer（原生）
 ```
 
-### 步骤
+关键突破是发现**搜索接口本身就带着可播放的 vid**
+（`leftButtonDTO.action.value`，覆盖率 75~100%），因此完全不必访问网页。
 
-**1. Fork 本仓库为公开仓库**
-公开仓库的 Actions 分钟数无限且免费；私有仓库只有 2000 分钟/月且需要绑定支付方式。
+主播放列表（`auto` 那条）的 `m3u8_url` 装的是清单**内容**而非 URL，
+App 会把它落盘成临时 m3u8 交给 AVPlayer，从而获得
+**1080p / 720p / 486p / 360p 自动码率切换**。
 
-**2. 触发构建**
-Actions 标签页 → `Build tvOS IPA (unsigned)` → `Run workflow` → 等约 10 分钟。
+### 权益边界
 
-**3. 下载产物**
-在运行记录页面底部 Artifacts 下载 `YoukuTV-tvos-ipa`，解压得到 `YoukuTV-unsigned.ipa`。
+VIP / 付费内容优酷会返回空地址（服务端校验会员权益后才下发）。
+**本项目有意不做会员校验绕过**，App 会明确提示
+"「XXX」为优酷VIP内容，需要会员账号才能播放"。
 
-**4. 侧载到 Apple TV**
-1. 电脑安装 [Sideloadly](https://sideloadly.io)（免费，明确支持 Apple TV / tvOS）
-2. Apple TV 与电脑连同一 WiFi
-3. Apple TV → 设置 → 遥控器与设备 → 远程 App 与设备，记下配对码
-4. Sideloadly 拖入 ipa → 选中 Apple TV → 输入**免费 Apple ID** → Start
-5. Apple TV → 设置 → 通用 → 隐私与安全性 → App 安装 → 信任开发者
+免费内容实测全部可播（《甄嬛传》5 集免费全可播，71 集会员按设计不可播）。
 
-> 免费 Apple ID 的签名有效期 7 天。在 Sideloadly 开启 `Auto-Refresh in Background`
-> 可在过期前自动续签。免费账号同时最多侧载 3 个 App。
+---
 
-## 有开发者账号时的本地构建
-
-```bash
-cd YoukuTV
-xcodegen generate --spec project.yml
-open YoukuTV.xcodeproj
-```
-
-在 Xcode 中选好 Team 与唯一的 Bundle ID，`Product → Archive` 即可。
-
-## 项目结构
+## 自己检查一遍
 
 ```
-YoukuTV/
-├── Sources/
-│   ├── YoukuTVApp.swift        应用入口
-│   ├── ContentView.swift       首页 / 详情页 / 播放页
-│   ├── Views.swift             卡片、剧集网格、加载与错误态
-│   ├── AppViewModel.swift      状态机与数据调度
-│   ├── YoukuWebClient.swift    优酷 H5 数据接口
-│   ├── YoukuMTopClient.swift   优酷 mtop 协议客户端（逆向成果）
-│   ├── PlayerController.swift  AVPlayer 播放控制
-│   └── WebPlayerView.swift     内嵌网页播放器（WKWebView）
-├── Tests/                      协议常量回归测试
-├── Resources/                  图标、Info.plist
-└── project.yml                 XcodeGen 工程配置
+python3 tools/一键自检.py
 ```
 
-## 逆向分析要点
+输出：
 
-详见仓库根目录的 `逆向分析报告.md`。核心结论：
+```
+  ✓ 编译        ← 用 macOS SDK 做等价编译，30 秒出结果
+  ✓ 凭据        ← 内置 ckey 是否还有效
+  ✓ 链路        ← 搜索 → 取 vid → 取播放地址（真实网络请求）
+```
 
-- mtop 网关 `acs.youku.com`，签名 `sign = MD5(token & t & appKey & data)`
-- token 来自服务端下发的 Cookie `_m_h5_tk` 前 32 位
-- appKey：`23164371`(TV) / `23061772`(OTT) / `23058384`(DVB)
-- TV 端播放地址接口依赖 SecurityGuard native 签名，无法纯客户端复现
+单项也可以单独跑：
 
-## 许可
+```
+python3 tools/本地编译检查.py       # 本机没 Xcode 也能跑
+python3 tools/校验凭据.py
+python3 tools/回归测试.py 庆余年 甄嬛传
+```
 
-代码部分以 MIT 许可提供。反向分析产物仅用于个人学习研究。
+---
+
+## 凭据失效了怎么办
+
+服务端会轮换 ckey（表现为接口返回 SUCCESS 但没有地址）。
+双击 `更新ckey.command` 重新生成（约 1 分钟，用真实浏览器抓一次），
+然后提交推送、Actions 重新编译。
+
+`tools/校验凭据.py` 可以随时检查当前凭据是否还有效。
+
+---
+
+## 文档
+
+| 文件 | 内容 |
+|---|---|
+| `逆向分析报告.md` | 1118 行，每条结论标注实测证据，含反例与修正记录 |
+| `零成本安装指南.md` | 面向没有开发背景的用户 |
+| `overview.md` | 项目总览与技术决策 |
+| `circleci-备用配置.yml` | GitHub 长期排队时的备用 CI 方案 |
+
+---
+
+## 常见问题
+
+**搜索结果打开是别的节目？**
+已修复。之前搜索接口会混入外站（腾讯/咪咕）内容，它们的 showId 指向别的节目。
+现在只保留优酷自有内容，并拒绝被 UTF-8 替换字符污染的 showId。
+
+**详情页显示"选集列表加载失败"？**
+优酷的网页有风控，选集列表拿不到。**不影响播放**——播放用的是搜索接口直出的 vid。
+点「重试」可能成功。
+
+**能看会员内容吗？**
+不能，这是有意的边界。见上文「权益边界」。
+
+**为什么源码里的 ckey 是明文的？**
+它是设备指纹签名，不是账号凭据。绑定的是 utid（设备标识）+ vid 之外的通用属性，
+且不绑定具体视频——所以一份凭据能取任意视频的播放地址。
