@@ -211,7 +211,8 @@ actor YoukuMTopClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         for (k, v) in cookieStore { request.setValue(v, forHTTPHeaderField: "Cookie-\(k)") }
 
-        let (response, body) = try await session.data(for: request)
+        // URLSession.data(for:) 返回 (Data, URLResponse) —— 顺序不能反
+        let (body, response) = try await session.data(for: request)
         captureCookies(from: response)
         guard let http = response as? HTTPURLResponse else {
             throw YoukuError.invalidResponse
@@ -243,8 +244,11 @@ actor YoukuMTopClient {
         ]
         var request = URLRequest(url: components.url!)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (_, _) = try? await session.data(for: request)
-        // 响应头里的 Set-Cookie 已由 captureCookies 收走
+        // 服务端在响应头里下发 _m_h5_tk，必须把 cookies 收走
+        // 注意 try? 会让返回值变成可选元组，不能直接解构
+        if let (_, response) = try? await session.data(for: request) {
+            captureCookies(from: response)
+        }
         if token.isEmpty {
             throw YoukuError.tokenUnavailable
         }
