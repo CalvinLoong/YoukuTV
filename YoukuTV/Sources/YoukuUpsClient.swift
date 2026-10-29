@@ -370,10 +370,10 @@ struct UpsCredential: Codable, Equatable {
     /// （同一天内可取任意 vid 的播放地址）。
     /// 当服务端轮换导致失效时，App 会提示更新；凭据可通过网络配置下发更新。
     static let builtin = UpsCredential(
-        ckey: "140#L/fo8eU3zzWaEzo23xxz4pN8s9DfOFcuuh7rHUehuYtJMLZkAKrLTxlKOhLR/ra8qVb2D3hqzzcZkcpWdxfzzWPQba7qlQzx2DD3VthqzF3zNZ2wlp1xzoObV2EqlVXnU6PI1wba7X53xEZmIggNskuwuqMpV5Tyo7EbL7Wb2fIq71JNzUoWx+GsaoCzoBB7lFJmWdpeABQKaYaQ6l+dAjjctu94sWlKBmB5WQeC7Ev/Wc9qPQjUN+n6FPY4N37Nwgyjdu9vv4nn6UGPK0PcVH/M4UiDyvrX6hIK4PDy3geOHzGfvYFbNqJRbxd/u+864omYYOY0LEm3blJF9TyI7w12fQ83h1K3+nNbOMOrsI4NZv47MWOKWa1h3flVfDFbRxCSexlXrstLAmYyI5hYdZmVxTJb+1Chhbzjqb7gBFygivOcltFXqaStIBnYrlIIIQO34PjGN9OYkiuDMrS8vsZ352Xx/TA2LLjcM6vup/h1qCdnejrI8Q3Hp/th8igw/iQGgATuatqyB9D4Tuu8lJc2nRcjFJx1y0NCm9i6RYC799+0eeVGYRqIbu/2/56nrzC0HmLWPZpOUoqhE/HivzU1BMYT8xjH4YdcAP/YouYeDksNk3n9WXfSJU8D5xuVfLKJc72hdysyPnG1o+Hkbg6dyjEIE5DBloOexrMMJprIQCxphKoymFC6jeDHD89DgSLBL82lDUTTHElqfG9v0sdEefnOzyUrBEYxpbrqnLogAUQiWebC6a7gRmvmEPnZIvxvAg6q1+2srj8Lz3rHmrmQiUYe3QHHHMgQIXOf7wPc5T+DeCXwKn+nYS8uL5uBtXFFTUEGh5vj4btF0OY91SkOK8eh1s9/kiFA5XyClr4Ejch2Pec6DqQu",
-        utid: "LV1nI+ibplkCAavdUaZ3x8To",
-        encryptRClient: "mWyojKcMy+C2HEuHOTGxTg==",
-        generatedAt: Date(timeIntervalSince1970: 1793093855)
+        ckey: "140#o8foFD6ezzWioQo2+bhu4pN8s9DfVoO52wuS/WRX/zGIMrMVf7dtiRzmxLATDWpY4FiWlp1zzRn0a2/SGFzxSx8za3h/zzrb22U3lp1xzCQiVXE/tFzx2Dc33b/BeHmijDapVrMn3rNmgkYEG5R5hPU4n8fKJKz0pKziPLYJIk1oX2QDQBoq3uz3pNJtDTp+wlAAJzY7a7oluQAA9ORe8Sk54uGspJd4oAqJKt6+jyGmx7j1Q/exmOk1UNGBkAOA80quTu/lBy2YR2j+9gFgjrHwuZVlN2162HflgwbOoyP/9DDGY60zrA6QEmMT+J7aVaXv+sUoBtcHXL7wyk0Hn9oTOcR8nqH9VTCfDHIHXLSYitT+OtVps49ybWAYQ/3LR0tOzh14nuweR69asPm0QRbSwqtEOzQ68vkO+1K6ieM509aqaxu8dQIwSxf5b95zz6m/dMDdEBKRba/sGR9LqDebjhcf5nT6WuSdeNJFOXWmWa9myBdjrWObmaEopgMYRWcxQJnfmnEN7vqdhwIPeQ3ExmrriutZ3aZh6uSuaOEDr+ZhNvY38yaDg/4E5v8gJ4CbQmY37wSnz3Py2R5Qvl4hIHEUXsFkicYkff82iTrfGSYQF8/s4tG7ZSr1fzcYPbZITZIjwiaJ+UWbcSy5nB+WG7afir+ULOCB6F/bcf0py5mgUyM5JodiH8vRFNgD3ElWpr5CBMXTarIhmbB57QSphuaGCdSJ8ki+TV+PtpsHUbviG6UVUopMeQxNcyeMkN0ddgdNFgC3huHE",
+        utid: "Dg5qI8+GsDsCAavdUaZcHoaR",
+        encryptRClient: "+UklxYpCot0pHeJOAcTh4A==",
+        generatedAt: Date(timeIntervalSince1970: 1793269837)
     )
 }
 
