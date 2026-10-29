@@ -13,6 +13,13 @@ import Foundation
 /// - 传输：`type=jsonp&dataType=jsonp&callback=mtopjsonp1`
 ///   响应形如 `mtopjsonp1({...})`，需剥离包装后解析
 ///
+/// ## 会员内容边界
+///
+/// 实测：VIP 剧集调用本接口返回 `SUCCESS` 但 `stream` 为空 —— 服务端在校验
+/// 会员权益后才下发地址。本项目**有意不处理**会员校验：
+/// 未登录状态下 VIP 内容取不到播放地址，属预期行为而非缺陷。
+/// 实测《甄嬛传》76 集里 5 集免费，这 5 集全部可正常取到地址。
+///
 /// ## ckey（防盗链）
 ///
 /// `steal_params.ckey` 是优酷的设备级签名，由阿里 AWSC（Web SecurityGuard）

@@ -115,7 +115,8 @@ struct EpisodeGrid: View {
                     onSelect(ep)
                 } label: {
                     HStack(spacing: 12) {
-                        Text("\(ep.index + 1)")
+                        // index 已经是实际集号（从播放页的 stage 字段取），不要再 +1
+                        Text("\(ep.index)")
                             .font(.system(size: 15, weight: .bold, design: .monospaced))
                             .foregroundStyle(Palette.accent)
                             .frame(width: 34, height: 34)

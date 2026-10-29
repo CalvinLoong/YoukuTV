@@ -158,6 +158,10 @@ final class AppViewModel: ObservableObject {
             playbacks = list
             if let best = list.first {
                 player?.play(best, title: episode?.title ?? item.title)
+            } else if episode?.isVip == true {
+                // 实测：VIP 剧集接口返回 SUCCESS 但 stream 为空，
+                // 服务端校验会员权益后才下发地址。本项目有意不做会员校验。
+                errorMessage = "本集为优酷会员内容，需要会员账号才能播放"
             } else {
                 errorMessage = "未找到可播放资源"
             }

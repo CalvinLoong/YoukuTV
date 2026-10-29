@@ -163,9 +163,17 @@ struct DetailView: View {
                                 .font(.system(size: 15))
                                 .foregroundStyle(Palette.tertiaryText)
                         } else {
-                            Text("剧集 · \(model.episodes.count)")
-                                .font(.system(size: 20, weight: .semibold))
-                                .foregroundStyle(Palette.primaryText)
+                            HStack(spacing: 8) {
+                                Text("剧集 · \(model.episodes.count)")
+                                    .font(.system(size: 20, weight: .semibold))
+                                    .foregroundStyle(Palette.primaryText)
+                                // 播放页声明的总集数可能大于实际解析出的数量
+                                if model.episodeTotal > model.episodes.count {
+                                    Text("共 \(model.episodeTotal) 集")
+                                        .font(.system(size: 15))
+                                        .foregroundStyle(Palette.tertiaryText)
+                                }
+                            }
                         }
                     }
                 }
@@ -227,6 +235,16 @@ struct PlayerView: View {
                     ErrorView(message: error) {
                         Task { await model.play(item: item, episode: episode) }
                     }
+
+                    // 返回详情页，避免用户卡在黑屏
+                    Button {
+                        model.route = .detail(item)
+                    } label: {
+                        Label("返回详情", systemImage: "chevron.left")
+                            .font(.system(size: 17, weight: .medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.white)
                 }
             } else {
                 VideoPlayer(player: player.player)
