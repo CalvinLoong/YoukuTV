@@ -36,3 +36,7 @@ jadx_mcp.py
 
 # 逆向分析下载的第三方混淆 JS（勿提交）
 h5js/
+
+# 本地编译检查产物
+*.o
+*.swiftmodule
