@@ -59,13 +59,19 @@ YAML 与全部 shell 块已校验通过。
 | 首页分类推荐 | ✅ 真实优酷内容 |
 | 搜索 | ✅ 真实优酷内容 |
 | 详情页 / 剧集列表 | ✅ 界面完成 |
-| 视频播放 | ✅ 已实现（双通道） |
+| 视频播放 | ✅ 已实现（ups 接口直取 + 多清晰度） |
 
-**播放采用双通道设计**：
-- 优先原生 AVPlayer —— 尝试 TV 端接口取 m3u8（依赖 SecurityGuard 设备签名，成功率低）
-- 失败自动降级到内嵌 WKWebView —— 打开 `list.youku.com/show/id_{showId}.html`
-  （实测可用：会 302 到真实播放页，页面标题即节目名）
-- 播放页右上角可手动在两个通道间切换
+**播放链路**：App 直接调用优酷 ups 接口取 m3u8，交给原生 AVPlayer 播放。
+
+- `YoukuUpsClient` — mtop md5 签名 + ups 接口，解析 JSONP 响应
+- 内置凭据（ckey + utid）— 实测**不绑定 vid**，一组凭据可播任意视频，有效期 > 2 天
+- 播放页提供清晰度切换（主播放列表 / 1080P / 720P / 标清）
+
+> ⚠️ tvOS **没有 WebKit**（Apple 官方：tvOS has no WKWebView at all），
+> 所以不存在"内嵌网页播放器"这条路径。早期版本基于 WKWebView 的桥接方案已废弃。
+
+**凭据失效怎么办**：双击 `更新ckey.command` 重新生成（约 1 分钟），
+或跑 `tools/校验凭据.py` 检查当前是否还有效。
 
 ---
 
