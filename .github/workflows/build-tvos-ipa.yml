@@ -25,16 +25,6 @@ on:
         options:
           - development
           - app-store-connect
-      runner:
-        description: '构建镜像（免费账户 macOS runner 供给紧张，可换镜像重试）'
-        required: false
-        default: 'auto'
-        type: choice
-        options:
-          - auto
-          - macos-15
-          - macos-14
-          - macos-13
 
 # 同一时间只跑一个构建，避免免费账户的并发额度被占满导致长时间排队
 concurrency:
@@ -46,11 +36,14 @@ jobs:
     name: Build unsigned tvOS IPA
     # 免费账户的 macOS runner 排队可能很久，超时后自动失败重来
     timeout-minutes: 45
-    # 免费账户的 macOS runner 供给紧张，排队几十分钟到数小时是常态。
-    #
-    # 列出多个镜像让 GitHub 自行挑有容量的。若排队太久，
-    # 可在触发时用 runner 输入项指定单个镜像重试。
-    runs-on: [macos-15, macos-14, macos-13]
+    # 重要：runs-on 的**数组**语义是 AND（要求 runner 同时具备所有标签），
+    # 不是 OR —— 写 [macos-15, macos-14] 会让任务永远排队。
+    # 要实现「任一镜像可用即可」，必须用 strategy.matrix（= OR）。
+    # 单个标签即可。GitHub 的 runs-on 数组是 AND 语义，
+    # 「任一镜像可用」要用 matrix 实现，但 matrix 会跑 3 个任务。
+    # 免费账户并发额度有限，这里固定用一个镜像；
+    # 若长期排不上，可在触发时改这一行的标签。
+    runs-on: macos-15
 
     env:
       BUNDLE_ID: ${{ inputs.bundle_id || 'com.workbuddy.youkutv' }}
