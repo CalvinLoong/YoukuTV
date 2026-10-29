@@ -34,20 +34,23 @@ jobs:
     name: Choose runner labels
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.pick.outputs.matrix }}
+      labels: ${{ steps.pick.outputs.labels }}
     steps:
       - id: pick
         env:
           REQUESTED: ${{ inputs.runner_label }}
         run: |
           set -e
+          # 输出必须是一个 JSON 字符串数组，配合下面
+          #   matrix: { label: ${{ fromJSON(...) }} }
+          # 使用（GitHub 官方文档的标准写法）。
           if [ -z "$REQUESTED" ]; then
-            MATRIX='[{"label":"macos-15-intel","os":"macos-15-intel"},{"label":"macos-26-intel","os":"macos-26-intel"},{"label":"macos-latest","os":"macos-latest"},{"label":"macos-15","os":"macos-15"}]'
+            LABELS='["macos-15-intel","macos-26-intel","macos-latest","macos-15"]'
           else
-            MATRIX="[{\"label\":\"$REQUESTED\",\"os\":\"$REQUESTED\"}]"
+            LABELS="[\"$REQUESTED\"]"
           fi
-          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
-          echo "Chosen: $MATRIX"
+          echo "labels=$LABELS" >> "$GITHUB_OUTPUT"
+          echo "Chosen: $LABELS"
 
   build:
     name: Build unsigned tvOS IPA (${{ matrix.label }})
@@ -64,8 +67,12 @@ jobs:
     # 四路同时抢，谁先拿到机器谁的产物生效，其余自动跳过。
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    runs-on: ${{ matrix.os }}
+      matrix:
+        label: ${{ fromJSON(needs.plan.outputs.labels) }}
+    runs-on: ${{ matrix.label }}
+    # 四路里失败几路不影响整体结论——只要有一路成功就算成功。
+    # 真正判定成败的是最后的 finalize 作业（有没有拿到 ipa）。
+    continue-on-error: true
 
     env:
       BUNDLE_ID: ${{ inputs.bundle_id || 'com.workbuddy.youkutv' }}
@@ -216,7 +223,7 @@ jobs:
             echo "## 构建结果：${{ matrix.label }}"
             echo ""
             echo "**Bundle ID**: \`$BUNDLE_ID\`"
-            echo "**Runner**: \`${{ matrix.os }}\`"
+            echo "**Runner**: \`${{ matrix.label }}\`"
             echo ""
             echo "### 安装步骤"
             echo "1. 下载下方 Artifacts 里的 \`YoukuTV-tvos-ipa-${{ matrix.label }}\`"
@@ -247,6 +254,7 @@ jobs:
       - name: Publish
         run: |
           set -e
+          mkdir -p downloaded
           IPA=$(find downloaded -name "*.ipa" | head -1)
           if [ -z "$IPA" ]; then
             echo "::error::四路构建都没有产出 ipa"
