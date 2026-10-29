@@ -1,0 +1,10 @@
+name: Probe Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-15
+    steps:
+      - run: echo "RUNNER_OK $(date)"
