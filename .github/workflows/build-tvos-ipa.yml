@@ -29,9 +29,10 @@ on:
 jobs:
   build:
     name: Build unsigned tvOS IPA
-    # macos-14 已进入弃用期（2026-11-02 完全停用），用 macos-15 更稳。
-    # 若该镜像暂不可用，可改回 macos-14。
-    runs-on: macos-15
+    # 免费账户的 macOS runner 供给紧张，排队是常态。
+    # 列出多个镜像，GitHub 会挑当前有空位的那个；macos-14 将于 2026-11-02 停用，
+    # 到时删掉这一行即可。
+    runs-on: [macos-15, macos-14]
 
     env:
       BUNDLE_ID: ${{ inputs.bundle_id || 'com.workbuddy.youkutv' }}
