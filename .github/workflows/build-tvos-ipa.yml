@@ -41,9 +41,9 @@ jobs:
           REQUESTED: ${{ inputs.runner_label }}
         run: |
           set -e
-          # 输出必须是一个 JSON 字符串数组，配合下面
-          #   matrix: { label: ${{ fromJSON(...) }} }
-          # 使用（GitHub 官方文档的标准写法）。
+          # 输出必须是一个 JSON 字符串数组，配合下面的 matrix.label + fromJSON
+          # 用法（GitHub 官方文档的标准写法）。
+          # 注意：注释里绝对不能出现双大括号表达式，GitHub 会把它当表达式解析。
           if [ -z "$REQUESTED" ]; then
             LABELS='["macos-15-intel","macos-26-intel","macos-latest","macos-15"]'
           else
