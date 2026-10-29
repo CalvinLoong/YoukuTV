@@ -147,9 +147,13 @@ struct DetailView: View {
                             }
                             .buttonStyle(.plain)
 
-                            Text("showId: \(item.showId)")
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(Palette.tertiaryText)
+                            Text(item.sourceName)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(Palette.secondaryText)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 5)
+                                .background(Palette.surfaceRaised)
+                                .clipShape(Capsule())
                         }
 
                         if model.isLoadingEpisodes {

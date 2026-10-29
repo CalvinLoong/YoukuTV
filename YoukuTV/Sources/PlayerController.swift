@@ -31,10 +31,13 @@ final class PlayerController: ObservableObject {
         currentTitle = title
         isLoading = true
 
-        let asset = AVURLAsset(
-            url: info.url,
-            options: [AVURLAssetHTTPHeaderFieldsKey: info.headers]
-        )
+        // 本地主播放列表（落盘的 m3u8）不需要 HTTP 头，
+        // 实测优酷 CDN 也不校验 Referer/UA。
+        let options: [String: Any] = info.url.isFileURL
+            ? [:]
+            : [AVURLAssetHTTPHeaderFieldsKey: info.headers]
+
+        let asset = AVURLAsset(url: info.url, options: options)
         let item = AVPlayerItem(asset: asset)
         player.replaceCurrentItem(with: item)
 

@@ -82,26 +82,45 @@ actor YoukuUpsClient {
 
         var results: [PlaybackInfo] = []
         for stream in streams {
-            guard let rawURL = stream["m3u8_url"] as? String,
-                  let url = URL(string: rawURL) else { continue }
+            guard let rawURL = stream["m3u8_url"] as? String, !rawURL.isEmpty else { continue }
 
-            // stream_type 形如 flvhd / mp4hd3 / mp5hd / auto
+            // stream_type 形如 cmfv4sd / cmfv4hd2 / cmfv4hd3 / auto
             let type = stream["stream_type"] as? String ?? ""
-            let quality = Self.quality(for: type)
+            let width = stream["width"] as? Int ?? 0
+            let height = stream["height"] as? Int ?? 0
+
+            // `auto` 这条不是 URL，而是**主播放列表的内容**（以 #EXTM3U 开头），
+            // 内含多条 EXT-X-STREAM-INF 变体流与音轨。实测其内部 URI 都是绝对地址，
+            // 因此可以落盘成临时 m3u8 交给 AVPlayer，从而获得自动码率切换能力。
+            if rawURL.hasPrefix("#EXTM3U") {
+                guard let localURL = Self.writeMasterPlaylist(rawURL, vid: vid) else { continue }
+                results.append(
+                    PlaybackInfo(
+                        url: localURL,
+                        quality: .master,
+                        streamType: "auto",
+                        headers: Self.defaultHeaders
+                    )
+                )
+                continue
+            }
+
+            guard let url = URL(string: rawURL) else { continue }
             results.append(
                 PlaybackInfo(
                     url: url,
-                    quality: quality,
+                    quality: Self.quality(for: type, width: width, height: height),
                     streamType: type,
                     headers: Self.defaultHeaders
                 )
             )
         }
-        // 主播放列表（auto）通常包含多码率，优先返回
+
+        // 主播放列表（auto）包含多码率，优先返回；其余按分辨率从高到低
         return results.sorted { lhs, rhs in
-            if lhs.streamType == "auto" { return true }
-            if rhs.streamType == "auto" { return false }
-            return lhs.quality.rawValue > rhs.quality.rawValue
+            if lhs.quality == .master { return true }
+            if rhs.quality == .master { return false }
+            return lhs.quality.order > rhs.quality.order
         }
     }
 
@@ -315,14 +334,63 @@ actor YoukuUpsClient {
     }
 
     /// stream_type → 清晰度标识。
-    static func quality(for streamType: String) -> Quality {
+    /// 根据 stream_type 与分辨率判断清晰度。
+    ///
+    /// 优先用实际分辨率（实测最准），stream_type 作为兜底。
+    /// 实测映射：`cmfv4sd`=640x360、`cmfv4hd`=864x486、`cmfv4hd2`=1280x720、
+    /// `cmfv4hd3`=1920x1080。
+    static func quality(for streamType: String, width: Int = 0, height: Int = 0) -> Quality {
         let t = streamType.lowercased()
         if t.contains("auto") { return .master }
+
+        // 有分辨率信息时以分辨率为准
+        if height > 0 {
+            switch height {
+            case 2160...: return .uhd
+            case 1080...: return .fhd
+            case 720...: return .hd
+            case 360...: return .sd
+            default: break
+            }
+        }
+
         if t.contains("5hd") || t.contains("4k") { return .uhd }
         if t.contains("hd3") || t.contains("hd2") { return .fhd }
         if t.contains("hd") { return .hd }
         if t.contains("sd") { return .sd }
         return .unknown
+    }
+
+    /// 把主播放列表内容落盘为临时 m3u8 文件。
+    ///
+    /// ups 响应里 `stream_type == "auto"` 的那一条，`m3u8_url` 字段装的
+    /// **不是 URL 而是清单内容**（以 `#EXTM3U` 开头），内含多条
+    /// `EXT-X-STREAM-INF` 变体流（1920x1080 / 1280x720 / 864x486 / 640x360）
+    /// 以及独立的音轨。
+    ///
+    /// 实测清单内部的 URI 全是绝对地址，因此落盘后 AVPlayer 能正常加载，
+    /// 并可自行按带宽做**自动码率切换** —— 这是单一清晰度地址做不到的。
+    static func writeMasterPlaylist(_ content: String, vid: String) -> URL? {
+        // 清理掉同名的旧文件
+        let sanitized = vid.replacingOccurrences(
+            of: "[^A-Za-z0-9_-]",
+            with: "_",
+            options: .regularExpression
+        )
+        let name = "yk_master_\(sanitized).m3u8"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+
+        // 内容里的换行是字面量 "\n"（两字符），需还原成真实换行
+        let normalized = content
+            .replacingOccurrences(of: "\\r\\n", with: "\n")
+            .replacingOccurrences(of: "\\n", with: "\n")
+
+        do {
+            try normalized.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            return nil
+        }
     }
 
     static let defaultHeaders: [String: String] = [
@@ -403,7 +471,8 @@ enum Quality: String, CaseIterable, Identifiable, Comparable {
         lhs.order < rhs.order
     }
 
-    private var order: Int {
+    /// 排序权重，数值越大清晰度越高。
+    var order: Int {
         switch self {
         case .master: return 5
         case .uhd: return 4

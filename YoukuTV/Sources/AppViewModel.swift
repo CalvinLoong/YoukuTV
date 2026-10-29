@@ -33,8 +33,14 @@ final class AppViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var searchKeyword = ""
 
+    /// 当前节目的总集数（来自详情页）。
+    private(set) var episodeTotal: Int = 0
+    /// 当前节目的 vid（来自详情页，用于直接播放首集）。
+    private(set) var currentVideoId: String = ""
+
     private let web = YoukuWebClient()
     private let ups = YoukuUpsClient()
+    private let episodeClient = YoukuEpisodeClient()
     private let mtop = YoukuMTopClient()
 
     /// 播放器引用，由 ContentView 注入。
@@ -93,11 +99,22 @@ final class AppViewModel: ObservableObject {
         route = .detail(item)
     }
 
+    /// 加载剧集列表。
+    ///
+    /// 数据来源：优酷 H5 播放页内嵌的 `window.__INITIAL_DATA__`，
+    /// 剧集在 `type == 10013` 的选集组件里，每条 item 的 `action_value` 就是 vid。
+    /// 这条路不需要任何设备签名，实测可直接取到完整剧集（如《甄嬛传》76 集）。
     func loadEpisodes(for item: VideoItem) async {
         isLoadingEpisodes = true
         defer { isLoadingEpisodes = false }
         do {
-            episodes = try await mtop.episodes(showId: item.showId, videoId: item.videoId)
+            let detail = try await episodeClient.detail(showId: item.showId)
+            episodes = detail.episodes
+            // 记录当前集 vid，供直接播放使用
+            currentVideoId = detail.videoId
+            if detail.episodeTotal > 0 {
+                episodeTotal = detail.episodeTotal
+            }
         } catch {
             episodes = []
         }
@@ -110,11 +127,31 @@ final class AppViewModel: ObservableObject {
         playbacks = []
         defer { isLoadingPlayback = false }
 
-        let vid = episode?.videoId ?? item.videoId
+        // 优先用选集里的 vid；没有就回落到详情页拿到的当前集 vid
+        var vid: String = ""
+        if let episodeVid = episode?.videoId, !episodeVid.isEmpty {
+            vid = episodeVid
+        } else if !item.videoId.isEmpty {
+            vid = item.videoId
+        } else if !currentVideoId.isEmpty {
+            vid = currentVideoId
+        }
+
+        // 剧集还没加载完用户就点了播放 —— 现取一次详情
+        if vid.isEmpty {
+            if let detail = try? await episodeClient.detail(showId: item.showId) {
+                vid = detail.videoId
+                if episodes.isEmpty { episodes = detail.episodes }
+                currentVideoId = detail.videoId
+                episodeTotal = detail.episodeTotal
+            }
+        }
+
         guard !vid.isEmpty else {
             errorMessage = "该内容暂无可播放资源"
             return
         }
+        currentVideoId = vid
 
         do {
             let list = try await ups.playback(for: vid, showId: item.showId)

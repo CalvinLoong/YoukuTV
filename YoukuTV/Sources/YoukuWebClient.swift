@@ -37,8 +37,23 @@ actor YoukuWebClient {
 
         return list.compactMap { component in
             guard let cd = component["commonData"] as? [String: Any] else { return nil }
-            let showId = cd["showId"] as? String ?? cd["realShowId"] as? String ?? ""
-            guard !showId.isEmpty else { return nil }
+
+            // ---- 过滤非优酷自有内容 ----
+            //
+            // 实测：搜索接口会混入外站内容（腾讯/咪咕等），它们的 showId
+            // 是外站 ID。拿这种 showId 请求 list.youku.com 会**静默跳到
+            // 完全不相干的其他节目**（搜「庆余年」打开是《知否知否》）。
+            // isYouku == 1 表示优酷自有内容，0 表示外站，-1 表示来源未知。
+            let isYouku = (cd["isYouku"] as? Int) == 1
+            guard isYouku else { return nil }
+
+            // ---- showId 有效性校验 ----
+            //
+            // 服务端偶尔返回损坏的 showId（实测「庆余年」的 showId 含
+            // U+FFFD 替换字符 efbfbd），这类 ID 同样会跳到别的节目。
+            // 优酷正常 showId 是 20 位小写十六进制。
+            let rawShowId = cd["showId"] as? String ?? cd["realShowId"] as? String ?? ""
+            guard Self.isValidShowId(rawShowId) else { return nil }
 
             // 标题在 titleDTO.displayName（实测 commonData 无顶层 title 字段）
             let titleDTO = cd["titleDTO"] as? [String: Any] ?? [:]
@@ -59,15 +74,34 @@ actor YoukuWebClient {
                 subtitle = notice
             }
 
+            let sourceName = cd["sourceName"] as? String ?? "优酷"
+
             return VideoItem(
-                showId: showId,
+                showId: rawShowId,
                 videoId: "",
                 title: title,
                 subtitle: subtitle,
                 poster: poster,
-                duration: 0
+                duration: 0,
+                sourceName: sourceName,
+                isYouku: isYouku
             )
         }
+    }
+
+    /// 校验 showId 格式。
+    ///
+    /// 优酷正常 showId 是 20 位小写十六进制字符串。
+    ///
+    /// 但服务端有相当比例的条目返回**被 UTF-8 替换字符污染**的 ID
+    /// （实测「动物世界」搜索结果 35 条优酷内容里有 9 条如此，形如
+    /// `43efbfbd51efbfbdefbf`）。`efbfbd` 本身是合法十六进制字符，
+    /// 所以单靠字符集判断拦不住，必须显式排除这个序列。
+    /// 这类 ID 指向错误内容，必须丢弃。
+    static func isValidShowId(_ id: String) -> Bool {
+        guard id.count == 20 else { return false }
+        guard !id.contains("efbfbd") else { return false }
+        return id.allSatisfy { $0.isHexDigit && !$0.isUppercase }
     }
 
     /// 首页推荐使用的热门关键词。

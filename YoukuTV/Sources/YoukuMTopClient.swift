@@ -320,7 +320,9 @@ actor YoukuMTopClient {
                     title: node["title"] as? String ?? node["name"] as? String ?? "未命名",
                     subtitle: node["subtitle"] as? String ?? node["subTitle"] as? String ?? "",
                     poster: node["img"] as? String ?? node["poster"] as? String ?? node["pic"] as? String ?? "",
-                    duration: node["duration"] as? Int ?? 0
+                    duration: node["duration"] as? Int ?? 0,
+                    sourceName: "优酷",
+                    isYouku: true
                 ))
             }
         }
@@ -338,7 +340,9 @@ actor YoukuMTopClient {
                 title: node["title"] as? String ?? node["name"] as? String ?? "未命名",
                 subtitle: node["subtitle"] as? String ?? "",
                 poster: node["img"] as? String ?? node["poster"] as? String ?? "",
-                duration: node["duration"] as? Int ?? 0
+                duration: node["duration"] as? Int ?? 0,
+                sourceName: "优酷",
+                isYouku: true
             ))
         }
         return items
@@ -353,7 +357,9 @@ actor YoukuMTopClient {
             title: node["title"] as? String ?? node["name"] as? String ?? "未命名",
             subtitle: node["subtitle"] as? String ?? "",
             poster: node["img"] as? String ?? node["poster"] as? String ?? "",
-            duration: node["duration"] as? Int ?? 0
+            duration: node["duration"] as? Int ?? 0,
+            sourceName: "优酷",
+            isYouku: true
         )
     }
 
@@ -391,6 +397,14 @@ struct VideoItem: Identifiable, Hashable {
     let subtitle: String
     let poster: String
     let duration: Int
+    /// 内容来源站点（实测：优酷自有为 "优酷"，外站为 "腾讯" / "咪咕" 等）。
+    let sourceName: String
+    /// 是否优酷自有内容。
+    ///
+    /// 重要：只有自有内容的 showId 才有效。外站内容的 showId 会让详情页
+    /// 静默跳到**完全不相干的其他节目**（实测搜「庆余年」打开是《知否知否》），
+    /// 因此必须在解析阶段过滤掉。
+    let isYouku: Bool
     var id: String { showId }
 }
 
