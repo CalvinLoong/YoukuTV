@@ -1,0 +1,90 @@
+# CircleCI 备用构建配置（GitHub Actions 长时间排队时使用）
+#
+# 背景：GitHub 免费账户的 macOS runner 供给紧张，实测出现过排队 4 小时
+# 仍未开始的情况。CircleCI 对公开仓库提供每月 30,000 macOS credits，
+# 可作为备选。
+#
+# 启用步骤：
+#   1. 到 https://circleci.com/signup 用 GitHub 账号登录
+#   2. 在仓库页面点 "Set Up Project" → 选 macOS 执行器 → 语言选 "Other"
+#   3. 把本文件改名为 .circleci/config.yml 放到仓库根目录
+#   4. 提交推送，CircleCI 会自动开始构建
+#
+# 说明：CircleCI 需要在网站上完成一次授权（GitHub Actions 不需要），
+# 所以这是备选而非首选。
+
+version: 2.1
+
+jobs:
+  build-tvos-ipa:
+    # macOS 14 执行器自带 Xcode 16，含 tvOS SDK
+    macos:
+      xcode: "16.2.0"
+      resource_class: m1.medium.general
+    steps:
+      - checkout
+
+      - run:
+          name: Install XcodeGen
+          command: |
+            brew install xcodegen
+            xcodegen --version
+
+      - run:
+          name: Generate Xcode project
+          command: cd YoukuTV && xcodegen generate --spec project.yml
+
+      - run:
+          name: Verify tvOS SDK
+          command: |
+            xcodebuild -version
+            xcodebuild -showsdks | grep -i appletvos || {
+              echo "no tvOS SDK found"; exit 1; }
+
+      - run:
+          name: Build app (unsigned)
+          command: |
+            cd YoukuTV
+            set -e
+            xcodebuild \
+              -project YoukuTV.xcodeproj \
+              -scheme YoukuTV \
+              -configuration Debug \
+              -sdk appletvos \
+              -destination 'generic/platform=tvOS' \
+              -derivedDataPath build/DerivedData \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO \
+              ENABLE_BITCODE=NO \
+              ONLY_ACTIVE_ARCH=NO \
+              ARCHS=arm64 \
+              build 2>&1 | tee build.log | tail -60
+
+      - run:
+          name: Package .ipa (unsigned)
+          command: |
+            cd YoukuTV
+            set -e
+            APP_PATH=$(find build/DerivedData/Build/Products -maxdepth 3 -name "*.app" | head -1)
+            if [ -z "$APP_PATH" ]; then
+              echo "::error::没有找到 .app 产物，编译日志末尾："
+              tail -40 build.log || true
+              exit 1
+            fi
+            rm -rf build/Payload build/YoukuTV-unsigned.ipa
+            mkdir -p build/Payload
+            cp -R "$APP_PATH" build/Payload/
+            mv "build/Payload/$(basename "$APP_PATH")" "build/Payload/YoukuTV.app"
+            cd build
+            zip -qry "YoukuTV-unsigned.ipa" Payload
+            ls -la *.ipa
+
+      - store_artifacts:
+          path: YoukuTV/build/YoukuTV-unsigned.ipa
+          destination: youku-tv-ipa
+
+workflows:
+  build:
+    jobs:
+      - build-tvos-ipa
