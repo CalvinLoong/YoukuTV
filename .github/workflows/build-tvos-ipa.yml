@@ -44,8 +44,12 @@ jobs:
           # 输出必须是一个 JSON 字符串数组，配合下面的 matrix.label + fromJSON
           # 用法（GitHub 官方文档的标准写法）。
           # 注意：注释里绝对不能出现双大括号表达式，GitHub 会把它当表达式解析。
+          #
+          # 默认只走 Intel 池：实测 macos-15-intel / macos-26-intel 秒级拿到机器，
+          # 而 arm64 池（macos-latest / macos-15）会长时间排队，
+          # 拖住整个 workflow 的收尾步骤。
           if [ -z "$REQUESTED" ]; then
-            LABELS='["macos-15-intel","macos-26-intel","macos-latest","macos-15"]'
+            LABELS='["macos-15-intel","macos-26-intel"]'
           else
             LABELS="[\"$REQUESTED\"]"
           fi
@@ -168,10 +172,12 @@ jobs:
         working-directory: YoukuTV
         run: |
           set -o pipefail
+          # 用 Release 而不是 Debug：Debug 版的 tvOS App 会拆出一个
+          # YoukuTV.debug.dylib 分体结构，侧载到 Apple TV 后容易起不来。
           xcodebuild \
             -project YoukuTV.xcodeproj \
             -scheme YoukuTV \
-            -configuration Debug \
+            -configuration Release \
             -sdk appletvos \
             -destination 'generic/platform=tvOS' \
             -derivedDataPath build/DerivedData \
@@ -196,11 +202,19 @@ jobs:
           fi
 
           # 组装 Payload 目录
+          # 注意：cp -R "$APP_PATH" build/Payload/ 已经是把整个 .app 目录
+          # 复制成 build/Payload/<AppName>.app，再 mv 同名目录必然报
+          # "Invalid argument"。这里只在名字不一致时才改名。
           rm -rf build/Payload build/YoukuTV.ipa
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
-          # 改名为与 scheme 同名，避免 Sideloadly 识别异常
-          mv "build/Payload/$(basename "$APP_PATH")" "build/Payload/${APP_NAME}.app"
+          SRC_NAME=$(basename "$APP_PATH")
+          if [ "$SRC_NAME" != "${APP_NAME}.app" ]; then
+            mv "build/Payload/${SRC_NAME}" "build/Payload/${APP_NAME}.app"
+          fi
+          ls -la build/Payload
+          test -f "build/Payload/${APP_NAME}.app/Info.plist" || {
+            echo "::error::Payload 结构异常"; exit 1; }
 
           cd build
           zip -qry "YoukuTV-unsigned.ipa" Payload
@@ -244,6 +258,10 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - name: Wait a moment for artifacts to settle
+        # 某些路可能还在排队，这里先给它们一点时间把已成功的产物传完
+        run: sleep 10
+
       - name: Download all IPA artifacts
         uses: actions/download-artifact@v4
         with:
@@ -257,7 +275,7 @@ jobs:
           mkdir -p downloaded
           IPA=$(find downloaded -name "*.ipa" | head -1)
           if [ -z "$IPA" ]; then
-            echo "::error::四路构建都没有产出 ipa"
+            echo "::error::所有构建路都没有产出 ipa"
             ls -R downloaded || true
             exit 1
           fi
