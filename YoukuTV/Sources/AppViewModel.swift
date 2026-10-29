@@ -2,9 +2,11 @@ import SwiftUI
 
 /// 应用状态机与数据编排。
 ///
-/// 数据通道说明：
-/// - 搜索与推荐走优酷 H5 接口 `search.youku.com/api/search`（已实测返回真实数据，免设备指纹签名）
-/// - mtop 通道保留用于 TV 端专有接口（已逆向出协议，但服务端要求 SecurityGuard 设备指纹，数据接口会返回空）
+/// ## 数据通道
+///
+/// - **搜索与推荐**：`search.youku.com/api/search`（免签名，已实测返回真实数据）
+/// - **播放地址**：`un-acs.youku.com` 的 `mtop.youku.play.ups.appinfo.get`
+///   （经实测：ckey 不绑定 vid，同一份凭据可取任意视频的播放地址）
 @MainActor
 final class AppViewModel: ObservableObject {
     enum Route: Equatable {
@@ -24,22 +26,21 @@ final class AppViewModel: ObservableObject {
     @Published var route: Route = .home
     @Published private(set) var rows: [Row] = []
     @Published private(set) var episodes: [Episode] = []
+    @Published private(set) var playbacks: [PlaybackInfo] = []
     @Published private(set) var isLoading = false
     @Published private(set) var isLoadingEpisodes = false
+    @Published private(set) var isLoadingPlayback = false
     @Published var errorMessage: String?
     @Published var searchKeyword = ""
-    @Published var isSearchFocused = false
 
     private let web = YoukuWebClient()
+    private let ups = YoukuUpsClient()
     private let mtop = YoukuMTopClient()
 
-    /// 播放器引用。由 ContentView 注入，用于在解析到播放地址后直接起播。
-    ///
-    /// PlayerController 本身是 @MainActor 隔离的，这里由 AppViewModel（同样在
-    /// MainActor 上）持有，不会产生跨 actor 访问。
+    /// 播放器引用，由 ContentView 注入。
     @MainActor weak var player: PlayerController?
 
-    // MARK: - 启动
+    // MARK: - 首页
 
     /// 加载首页推荐。
     func bootstrap() async {
@@ -56,7 +57,6 @@ final class AppViewModel: ObservableObject {
                     collected.append(Row(id: keyword, title: title, items: items))
                 }
             } catch {
-                // 单行失败不影响其他行
                 continue
             }
         }
@@ -103,25 +103,36 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    /// 发起播放。
-    func play(item: VideoItem, episode: Episode?) {
+    /// 发起播放：解析播放地址并交给播放器。
+    func play(item: VideoItem, episode: Episode?) async {
         route = .player(item, episode)
-    }
+        isLoadingPlayback = true
+        playbacks = []
+        defer { isLoadingPlayback = false }
 
-    /// 解析播放地址并交给播放器。
-    ///
-    /// TV 端播放接口依赖 SecurityGuard native 签名，成功率低；
-    /// 失败时播放页会自动降级到内嵌网页播放器。
-    func resolvePlayback(for item: VideoItem, episode: Episode?) async {
+        let vid = episode?.videoId ?? item.videoId
+        guard !vid.isEmpty else {
+            errorMessage = "该内容暂无可播放资源"
+            return
+        }
+
         do {
-            let data = try await mtop.playInfo(showId: item.showId, videoId: episode?.videoId ?? item.videoId)
-            guard let info = PlaybackResolver.resolve(from: data) else {
-                throw YoukuError.decodingFailed("未找到可播放地址")
+            let list = try await ups.playback(for: vid, showId: item.showId)
+            playbacks = list
+            if let best = list.first {
+                player?.play(best, title: episode?.title ?? item.title)
+            } else {
+                errorMessage = "未找到可播放资源"
             }
-            player?.play(info, title: episode?.title ?? item.title)
         } catch {
-            // 不在此处弹错，播放页会切换到网页播放器
-            player?.errorMessage = (error as? YoukuError)?.errorDescription ?? error.localizedDescription
+            errorMessage = (error as? YoukuError)?.errorDescription ?? error.localizedDescription
         }
     }
+
+    /// 切换清晰度。
+    func selectQuality(_ info: PlaybackInfo) {
+        player?.play(info, title: currentTitle)
+    }
+
+    private var currentTitle: String = ""
 }

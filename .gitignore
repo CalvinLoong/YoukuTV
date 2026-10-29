@@ -33,3 +33,6 @@ ymt.py
 extract.py
 extract2.py
 jadx_mcp.py
+
+# 逆向分析下载的第三方混淆 JS（勿提交）
+h5js/

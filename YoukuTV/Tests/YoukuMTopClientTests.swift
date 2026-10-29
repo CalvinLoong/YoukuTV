@@ -42,23 +42,41 @@ final class YoukuMTopClientTests: XCTestCase {
         _ = client
     }
 
-    func testPlaybackQualityTokens() {
-        // 证据: com.youku.tv.playerChecker.PlayerCheckerActivity_ 字符串表
-        XCTAssertEqual(PlaybackResolver.Quality.fourK.playerToken, "sys_4k")
-        XCTAssertEqual(PlaybackResolver.Quality.hd1080p.playerToken, "sys_1080p_h265")
+    // MARK: - 播放通道
+
+    func testUpsEndpointConstants() {
+        // 证据: HAR 抓取的优酷网页播放页 ups 请求
+        XCTAssertEqual(YoukuUpsClient.appKey, "24679788")
+        XCTAssertEqual(YoukuUpsClient.host, "un-acs.youku.com")
+        XCTAssertEqual(YoukuUpsClient.api, "mtop.youku.play.ups.appinfo.get")
+        XCTAssertEqual(YoukuUpsClient.version, "1.1")
     }
 
-    func testWebPlayURLFormat() {
-        // 实测: list.youku.com/show/id_{showId}.html 会 302 到 v.youku.com/v_show/id_{vid}.html?s={showId}
-        let url = YoukuWebPage.playURL(showId: "9bbc2c96790d11e4b522")
-        XCTAssertEqual(url?.absoluteString,
-                       "https://list.youku.com/show/id_9bbc2c96790d11e4b522.html")
-        XCTAssertNotNil(YoukuWebPage.searchURL(keyword: "三体"))
+    func testQualityMapping() {
+        // 实测 ups 响应里的 stream_type → 清晰度
+        XCTAssertEqual(YoukuUpsClient.quality(for: "auto"), .master)
+        XCTAssertEqual(YoukuUpsClient.quality(for: "mp4hd"), .fhd)
+        XCTAssertEqual(YoukuUpsClient.quality(for: "flvhd"), .hd)
+        XCTAssertEqual(YoukuUpsClient.quality(for: "未知类型"), .unknown)
     }
 
     func testDefaultPlaybackHeadersIncludeReferer() {
-        let headers = PlaybackResolver.defaultHeaders()
-        XCTAssertEqual(headers["Referer"], "https://www.youku.com/")
+        let headers = YoukuUpsClient.defaultHeaders
+        XCTAssertEqual(headers["Referer"], "https://v.youku.com/")
         XCTAssertNotNil(headers["User-Agent"])
+    }
+
+    func testStripJSONP() {
+        // 实测 ups 响应为 JSONP 包装: mtopjsonp1({...})
+        let body = "mtopjsonp1({\"ret\":[\"SUCCESS::调用成功\"],\"data\":{\"enc\":0}})"
+        let parsed = YoukuUpsClient.stripJSONP(body)
+        XCTAssertNotNil(parsed)
+        XCTAssertEqual(parsed?["data"] as? [String: Any] != nil, true)
+    }
+
+    func testBuiltinCredentialIsPresent() {
+        // 内置 ckey / utid 必须存在，否则取不到播放地址
+        XCTAssertFalse(YoukuUpsClient.builtin.ckey.isEmpty)
+        XCTAssertFalse(YoukuUpsClient.builtin.utid.isEmpty)
     }
 }

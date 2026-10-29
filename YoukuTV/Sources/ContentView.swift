@@ -1,9 +1,12 @@
 import SwiftUI
+import AVKit
 
 /// 应用主视图：顶部 Tab 切换 + 内容区。
 struct ContentView: View {
     @StateObject private var model = AppViewModel()
     @StateObject private var player = PlayerController()
+    /// 搜索框焦点（tvOS 上用遥控器唤起键盘）
+    @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -19,7 +22,7 @@ struct ContentView: View {
                     PlayerView(item: item, episode: episode, player: player, model: model)
                 }
             }
-            .navigationBarHidden(model.route != .home)
+            .toolbar(model.route != .home ? .hidden : .visible, for: .navigationBar)
         }
         .task { await model.bootstrap() }
         .onAppear { model.player = player }
@@ -83,7 +86,7 @@ struct ContentView: View {
                 TextField("搜索影片", text: $model.searchKeyword)
                     .textFieldStyle(.plain)
                     .foregroundStyle(Palette.primaryText)
-                    .focused($model.isSearchFocused)
+                    .focused($isSearchFocused)
                     .onSubmit { Task { await model.performSearch() } }
                 if !model.searchKeyword.isEmpty {
                     Button {
@@ -132,7 +135,7 @@ struct DetailView: View {
 
                         HStack(spacing: 14) {
                             Button {
-                                model.play(item: item, episode: nil)
+                                Task { await model.play(item: item, episode: nil) }
                             } label: {
                                 Label("播放", systemImage: "play.fill")
                                     .font(.system(size: 17, weight: .semibold))
@@ -165,7 +168,7 @@ struct DetailView: View {
 
                 if !model.episodes.isEmpty {
                     EpisodeGrid(episodes: model.episodes) { ep in
-                        model.play(item: item, episode: ep)
+                        Task { await model.play(item: item, episode: ep) }
                     }
                 }
             }
@@ -199,80 +202,31 @@ struct DetailView: View {
     }
 }
 
-/// 播放页。
+/// 播放页。原生 AVPlayer 直连优酷 m3u8。
 ///
-/// 三段式策略（自动降级）：
-/// 1. 原生 AVPlayer —— 若能直接拿到免签名的 m3u8 地址则最优
-/// 2. 桥接模式 —— 用 WKWebView 加载播放页，注入钩子拦截页面自己请求到的
-///    m3u8 地址，拿到后交给原生 AVPlayer 播放（网页负责算 ckey，App 不碰密钥）
-/// 3. 网页内播放 —— 桥接失败时让网页自行播放（兼容性最好）
+/// tvOS 自 9.0 起完全移除了 WebKit（无 WKWebView / SFSafariViewController），
+/// 因此播放地址必须由 App 直接调用优酷 ups 接口获取。
 struct PlayerView: View {
     let item: VideoItem
     let episode: Episode?
     @ObservedObject var player: PlayerController
     @ObservedObject var model: AppViewModel
 
-    /// 当前使用的播放通道
-    @State private var useWebPlayer = false
-    @State private var webError: String?
-    /// 桥接模式下是否正在隐藏 WebView（已取到地址，交给原生播放器）
-    @State private var bridgeResolved = false
-    /// 桥接超时的兜底计时器
-    @State private var bridgeTimeout: Task<Void, Never>?
+    @State private var showQualityPicker = false
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            // 原生播放器（直接拿到地址，或桥接成功后接管）
-            if showNativePlayer {
+            if let error = player.errorMessage ?? model.errorMessage {
+                VStack(spacing: 24) {
+                    ErrorView(message: error) {
+                        Task { await model.play(item: item, episode: episode) }
+                    }
+                }
+            } else {
                 VideoPlayer(player: player.player)
                     .ignoresSafeArea()
-            }
-
-            // 网页播放器：桥接成功前负责算 ckey 并发起请求；
-            // 成功后隐藏但保留在后台，维持页面会话（部分 CDN 需要）
-            if useWebPlayer, let url = YoukuWebPage.playURL(showId: item.showId) {
-                WebPlayerView(url: url, mode: .bridge) { extracted in
-                    handleExtractedPlayback(extracted)
-                } onLoaded: {
-                    // 页面加载完成，开始等待地址拦截
-                } onError: { message in
-                    webError = message
-                }
-                .ignoresSafeArea()
-                .opacity(bridgeResolved ? 0 : 1)
-                .allowsHitTesting(!bridgeResolved)
-            }
-
-            // 完全没走网页通道、且原生播放失败时的提示
-            if !useWebPlayer, !showNativePlayer, let error = player.errorMessage {
-                VStack(spacing: 24) {
-                    ErrorView(message: error)
-                    Button("用网页播放器打开") {
-                        useWebPlayer = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Palette.accent)
-                }
-            }
-
-            if let webError {
-                VStack {
-                    HStack {
-                        Spacer()
-                        Text(webError)
-                            .font(.system(size: 15))
-                            .foregroundStyle(Palette.accentWarm)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .background(Color.black.opacity(0.75))
-                            .clipShape(Capsule())
-                            .padding(.trailing, 60)
-                            .padding(.top, 40)
-                    }
-                    Spacer()
-                }
             }
 
             VStack {
@@ -288,78 +242,87 @@ struct PlayerView: View {
                         }
                     }
                     Spacer()
-                    if player.isLoading { ProgressView().controlSize(.large) }
 
-                    // 播放通道切换
-                    Button {
-                        useWebPlayer.toggle()
-                        bridgeResolved = false
-                    } label: {
-                        Label(
-                            useWebPlayer ? "原生播放器" : "网页播放器",
-                            systemImage: useWebPlayer ? "tv.badge.wifi" : "safari.fill"
-                        )
-                        .font(.system(size: 15, weight: .medium))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 9)
-                        .background(Color.white.opacity(0.16))
-                        .clipShape(Capsule())
+                    if model.isLoadingPlayback {
+                        ProgressView().controlSize(.large)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.white)
+
+                    // 清晰度选择
+                    if !model.playbacks.isEmpty {
+                        Button {
+                            showQualityPicker.toggle()
+                        } label: {
+                            Label(
+                                model.playbacks.first?.quality.rawValue ?? "清晰度",
+                                systemImage: "slider.horizontal.3"
+                            )
+                            .font(.system(size: 15, weight: .medium))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 9)
+                            .background(Color.white.opacity(0.16))
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white)
+                    }
                 }
                 .padding(.horizontal, 60)
                 .padding(.top, 40)
                 Spacer()
             }
         }
-        .task {
-            // 第一步：尝试直接取免签名的原生播放地址
-            await model.resolvePlayback(for: item, episode: episode)
-
-            // 第二步：拿不到就进入桥接模式 —— 让网页自己算 ckey，我们只拦截地址
-            if player.errorMessage != nil {
-                player.errorMessage = nil
-                useWebPlayer = true
-                startBridgeTimeout()
+        .overlay {
+            if showQualityPicker {
+                qualitySheet
             }
         }
-        .onDisappear {
-            bridgeTimeout?.cancel()
-            bridgeTimeout = nil
+        .task {
+            await model.play(item: item, episode: episode)
         }
     }
 
-    /// 是否显示原生播放器。
-    /// 桥接成功，或直接取到地址（尚未进入网页通道）时显示。
-    private var showNativePlayer: Bool {
-        if bridgeResolved { return true }
-        if useWebPlayer { return false }
-        return player.errorMessage == nil
-    }
+    private var qualitySheet: some View {
+        VStack(spacing: 24) {
+            Text("选择清晰度")
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(Palette.primaryText)
 
-    /// 从网页拦截到 m3u8 后，交给原生播放器播放。
-    private func handleExtractedPlayback(_ url: URL) {        bridgeTimeout?.cancel()
-        bridgeTimeout = nil
+            VStack(spacing: 12) {
+                ForEach(model.playbacks) { info in
+                    Button {
+                        model.selectQuality(info)
+                        showQualityPicker = false
+                    } label: {
+                        HStack {
+                            Text(info.quality.rawValue)
+                                .font(.system(size: 18, weight: .medium))
+                            Spacer()
+                            if info.streamType == "auto" {
+                                Text("多码率")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Palette.secondaryText)
+                            }
+                            if model.playbacks.first?.id == info.id {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(Palette.accent)
+                            }
+                        }
+                        .foregroundStyle(Palette.primaryText)
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 16)
+                        .frame(width: 340)
+                        .background(Palette.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.card)
+                }
+            }
 
-        let info = PlaybackResolver.PlaybackInfo(
-            url: url,
-            quality: .hd1080p,
-            headers: PlaybackResolver.defaultHeaders()
-        )
-        player.play(info, title: episode?.title ?? item.title)
-        bridgeResolved = true
-    }
-
-    /// 桥接兜底：超过 15 秒还没拦截到地址，就让网页自己播。
-    private func startBridgeTimeout() {
-        bridgeTimeout?.cancel()
-        bridgeTimeout = Task {
-            try? await Task.sleep(nanoseconds: 15_000_000_000)
-            guard !Task.isCancelled, !bridgeResolved else { return }
-            // 没拦住就让网页继续自行播放（此时 useWebPlayer 仍为 true，
-            // 只是桥接模式拿不到地址，网页内播放依然可用）
-            bridgeResolved = false
+            Button("取消") { showQualityPicker = false }
+                .font(.system(size: 17))
+                .foregroundStyle(Palette.secondaryText)
         }
+        .padding(50)
+        .background(Palette.background.opacity(0.97))
     }
 }
