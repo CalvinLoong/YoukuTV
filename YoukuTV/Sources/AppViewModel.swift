@@ -37,6 +37,8 @@ final class AppViewModel: ObservableObject {
     private(set) var episodeTotal: Int = 0
     /// 当前节目的 vid（来自详情页，用于直接播放首集）。
     private(set) var currentVideoId: String = ""
+    /// 是否成功取到选集列表（区分"取不到"与"确实没有选集"）。
+    private(set) var hasEpisodeList: Bool = false
 
     private let web = YoukuWebClient()
     private let ups = YoukuUpsClient()
@@ -103,20 +105,27 @@ final class AppViewModel: ObservableObject {
     ///
     /// 数据来源：优酷 H5 播放页内嵌的 `window.__INITIAL_DATA__`，
     /// 剧集在 `type == 10013` 的选集组件里，每条 item 的 `action_value` 就是 vid。
-    /// 这条路不需要任何设备签名，实测可直接取到完整剧集（如《甄嬛传》76 集）。
+    ///
+    /// **注意**：优酷对 HTML 页面访问有风控，频繁请求会返回验证码页
+    /// （`window._config_.action == "captcha"`）。因此这条路径是**补充**而非必需：
+    /// 播放本身不依赖它 —— 搜索接口的 `leftButtonDTO` 已经带了 vid，
+    /// 拿不到选集也照样能播放当前集。
     func loadEpisodes(for item: VideoItem) async {
         isLoadingEpisodes = true
         defer { isLoadingEpisodes = false }
         do {
             let detail = try await episodeClient.detail(showId: item.showId)
             episodes = detail.episodes
+            hasEpisodeList = detail.hasEpisodeList
             // 记录当前集 vid，供直接播放使用
             currentVideoId = detail.videoId
             if detail.episodeTotal > 0 {
                 episodeTotal = detail.episodeTotal
             }
         } catch {
+            // 拿不到选集不影响播放：搜索结果里已经带了 vid
             episodes = []
+            hasEpisodeList = false
         }
     }
 
@@ -158,10 +167,10 @@ final class AppViewModel: ObservableObject {
             playbacks = list
             if let best = list.first {
                 player?.play(best, title: episode?.title ?? item.title)
-            } else if episode?.isVip == true {
-                // 实测：VIP 剧集接口返回 SUCCESS 但 stream 为空，
+            } else if item.badge == "VIP" || item.badge == "付费" || episode?.isVip == true {
+                // 实测：会员内容接口返回 SUCCESS 但 stream 为空，
                 // 服务端校验会员权益后才下发地址。本项目有意不做会员校验。
-                errorMessage = "本集为优酷会员内容，需要会员账号才能播放"
+                errorMessage = "「\(item.title)」为优酷\(item.badge.isEmpty ? "会员" : item.badge)内容，需要会员账号才能播放"
             } else {
                 errorMessage = "未找到可播放资源"
             }

@@ -134,6 +134,17 @@ struct DetailView: View {
                         }
 
                         HStack(spacing: 14) {
+                            // 权益角标（VIP / 付费 / 独播 / 预告）
+                            if !item.badge.isEmpty {
+                                Text(item.badge)
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(.black)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Palette.accentWarm)
+                                    .clipShape(Capsule())
+                            }
+
                             Button {
                                 Task { await model.play(item: item, episode: nil) }
                             } label: {
@@ -159,9 +170,22 @@ struct DetailView: View {
                         if model.isLoadingEpisodes {
                             ProgressView().controlSize(.small)
                         } else if model.episodes.isEmpty {
-                            Text("暂无剧集信息")
-                                .font(.system(size: 15))
-                                .foregroundStyle(Palette.tertiaryText)
+                            HStack(spacing: 16) {
+                                Text(model.hasEpisodeList
+                                     ? "本节目暂无选集"
+                                     : "选集列表加载失败")
+                                    .font(.system(size: 15))
+                                    .foregroundStyle(Palette.tertiaryText)
+                                // 优酷的 SSR 数据是间歇性返回的，重试有机会拿到
+                                if !model.hasEpisodeList {
+                                    Button("重试") {
+                                        Task { await model.loadEpisodes(for: item) }
+                                    }
+                                    .font(.system(size: 15, weight: .medium))
+                                    .buttonStyle(.bordered)
+                                    .tint(Palette.accent)
+                                }
+                            }
                         } else {
                             HStack(spacing: 8) {
                                 Text("剧集 · \(model.episodes.count)")

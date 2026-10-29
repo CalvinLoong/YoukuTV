@@ -2,25 +2,44 @@ import Foundation
 
 /// 从优酷 H5 播放页提取节目详情与剧集列表。
 ///
-/// 逆向/实测来源：
-/// - 播放页地址 `https://list.youku.com/show/id_{showId}.html`
-///   会 302 到 `https://v.youku.com/v_show/id_{vid}.html?s={showId}`
-/// - 页面内嵌 `window.__INITIAL_DATA__`，含 `pageMap.extra`（节目元信息）
-///   与 `moduleList[].components[]`（页面组件）
-/// - 剧集列表在 `type == 10013` 的组件里（typeName: "Web播放页选集组件"），
-///   每条 item 的 `action_value` 就是该集的 vid
+/// ## 数据来源
 ///
-/// 不需要任何签名或设备指纹，普通 HTTPS 请求即可。
+/// 播放页地址 `https://list.youku.com/show/id_{showId}.html`
+/// 会 302 跳到 `https://v.youku.com/v_show/id_{vid}.html?&s={showId}`。
+///
+/// 跳转后的页面内嵌 `window.__INITIAL_DATA__`，含：
+/// - `pageMap.extra` —— 节目元信息（videoId / showName / episodeTotal / poster）
+/// - `moduleList[].components[]` —— 页面组件，其中 `type == 10013`
+///   的「Web播放页选集组件」装着完整剧集列表，每条 item 的 `action_value`
+///   就是该集的 vid
+///
+/// ## SSR 数据的两个坑（均经实测）
+///
+/// 1. **带 Referer 会拿不到 SSR 数据**。服务端只对「无 Referer + 常规浏览器 UA」
+///    的请求做服务端渲染；带 Referer 或用 Bot UA 会返回 1.5KB 的骨架页
+///    （数据靠页内 JS 运行时加载，而 tvOS 没有 JS 引擎可用）。
+///    实测：不带 Referer 时 57 万字符带 `__INITIAL_DATA__`，
+///    带 Referer 时只有 1549 字符且没有该字段。
+///
+/// 2. **即使不带 Referer，SSR 也只是间歇性返回**（实测同 URL 8 次请求里
+///    只有 2 次带完整数据）。所以必须重试，并且要有兜底路径。
+///
+/// ## 兜底：从跳转 URL 取 vid
+///
+/// 即使完全拿不到 SSR 数据，302 跳转后的 URL 里也一定含 vid
+/// （`/v_show/id_{vid}.html`），实测 100% 可用。至少保证「能播第一集」。
 actor YoukuEpisodeClient {
     private let session: URLSession
 
     init() {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 25
+        config.httpShouldSetCookies = false
+        // 注意：这里**故意不设置 Referer**。
+        // 实测带 Referer 会让优酷返回不含 __INITIAL_DATA__ 的骨架页。
         config.httpAdditionalHeaders = [
-            "User-Agent": "Mozilla/5.0 (Apple TV; CPU like Mac OS X) AppleWebKit/605.1.15 "
-                + "(KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-            "Referer": "https://www.youku.com/",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         ]
         self.session = URLSession(configuration: config)
@@ -36,32 +55,90 @@ actor YoukuEpisodeClient {
         let episodeTotal: Int
         /// 海报
         let poster: String
-        /// 剧集列表
+        /// 剧集列表（SSR 不可用时为空）
         let episodes: [Episode]
+        /// 是否拿到了完整剧集列表
+        let hasEpisodeList: Bool
     }
 
     /// 加载节目详情与剧集列表。
+    ///
+    /// 策略：先尝试拿 SSR 完整数据（重试若干次，因为服务端只是间歇性返回），
+    /// 拿不到就退回「只用跳转 URL 里的 vid」，此时只能播放当前集、没有选集列表。
     func detail(showId: String) async throws -> Detail {
         guard YoukuWebClient.isValidShowId(showId) else {
             throw YoukuError.decodingFailed("节目标识无效")
         }
 
         let url = URL(string: "https://list.youku.com/show/id_\(showId).html")!
-        var request = URLRequest(url: url)
-        request.httpShouldHandleCookies = false
-        let (data, response) = try await session.data(for: request)
 
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw YoukuError.httpStatus(http.statusCode)
-        }
-        guard let html = String(data: data, encoding: .utf8) else {
-            throw YoukuError.decodingFailed("页面编码异常")
+        // 最多尝试 4 次：SSR 只是间歇性返回
+        var lastError: Error?
+        for attempt in 0..<4 {
+            do {
+                let (data, response) = try await session.data(from: url)
+
+                if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                    throw YoukuError.httpStatus(http.statusCode)
+                }
+                guard let html = String(data: data, encoding: .utf8) else {
+                    throw YoukuError.decodingFailed("页面编码异常")
+                }
+
+                // 兜底：跳转 URL 里一定有 vid
+                let redirectVid = Self.videoId(fromFinalURL: response.url)
+
+                if let root = try? Self.parseInitialData(html) {
+                    let detail = Self.buildDetail(from: root, fallbackVid: redirectVid)
+                    if detail.hasEpisodeList || !detail.videoId.isEmpty {
+                        return detail
+                    }
+                }
+
+                // 只有 vid 也能播
+                if !redirectVid.isEmpty {
+                    return Detail(
+                        videoId: redirectVid,
+                        showName: "",
+                        episodeTotal: 0,
+                        poster: "",
+                        episodes: [],
+                        hasEpisodeList: false
+                    )
+                }
+                lastError = YoukuError.decodingFailed("页面结构已变更")
+            } catch {
+                lastError = error
+            }
+
+            // 退避后重试
+            if attempt < 3 {
+                try? await Task.sleep(nanoseconds: UInt64(600_000_000 * UInt64(attempt + 1)))
+            }
         }
 
-        let root = try Self.parseInitialData(html)
+        throw lastError ?? YoukuError.decodingFailed("无法获取节目详情")
+    }
+
+    // MARK: - 解析
+
+    /// 从跳转后的 URL 里提取 vid。
+    ///
+    /// `https://v.youku.com/v_show/id_XMzcxNDY5ODQ4.html?&s=...`
+    static func videoId(fromFinalURL url: URL?) -> String {
+        guard let url else { return "" }
+        let path = url.path
+        guard let range = path.range(of: "/v_show/id_") else { return "" }
+        let rest = path[range.upperBound...]
+        guard let dot = rest.firstIndex(of: ".") else { return "" }
+        return String(rest[..<dot])
+    }
+
+    /// 组装详情（从 `__INITIAL_DATA__`）。
+    static func buildDetail(from root: [String: Any], fallbackVid: String) -> Detail {
         let extra = (root["pageMap"] as? [String: Any])?["extra"] as? [String: Any] ?? [:]
 
-        let videoId = extra["videoId"] as? String ?? ""
+        let videoId = extra["videoId"] as? String ?? fallbackVid
         let showName = extra["showName"] as? String ?? ""
         let episodeTotal = extra["episodeTotal"] as? Int ?? 0
         let posterDTO = extra["posterDTO"] as? [String: Any] ?? [:]
@@ -69,17 +146,16 @@ actor YoukuEpisodeClient {
             ?? posterDTO["img"] as? String
             ?? ""
 
-        let episodes = Self.parseEpisodes(root)
+        let episodes = parseEpisodes(root)
         return Detail(
             videoId: videoId,
             showName: showName,
             episodeTotal: episodeTotal,
             poster: poster,
-            episodes: episodes
+            episodes: episodes,
+            hasEpisodeList: !episodes.isEmpty
         )
     }
-
-    // MARK: - 解析
 
     /// 提取页面内嵌的 `window.__INITIAL_DATA__`。
     ///
@@ -143,10 +219,11 @@ actor YoukuEpisodeClient {
                         ?? (offset + 1)
                     let title = item["title"] as? String ?? "第\(stage)集"
 
-                    // episodeInfo.benefitType != 0 表示会员内容
+                    // episodeInfo.benefitType 标识内容权益类型。
+                    // 实测：0 与 1 均可正常播放；5 表示会员内容（取不到地址）。
                     let episodeInfo = item["episodeInfo"] as? [String: Any] ?? [:]
                     let benefitType = episodeInfo["benefitType"] as? Int ?? 0
-                    let isVip = benefitType != 0
+                    let isVip = benefitType == 5
 
                     episodes.append(Episode(
                         index: stage,

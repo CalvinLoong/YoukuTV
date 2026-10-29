@@ -322,7 +322,8 @@ actor YoukuMTopClient {
                     poster: node["img"] as? String ?? node["poster"] as? String ?? node["pic"] as? String ?? "",
                     duration: node["duration"] as? Int ?? 0,
                     sourceName: "优酷",
-                    isYouku: true
+                    isYouku: true,
+                    badge: ""
                 ))
             }
         }
@@ -342,7 +343,8 @@ actor YoukuMTopClient {
                 poster: node["img"] as? String ?? node["poster"] as? String ?? "",
                 duration: node["duration"] as? Int ?? 0,
                 sourceName: "优酷",
-                isYouku: true
+                isYouku: true,
+                badge: ""
             ))
         }
         return items
@@ -359,7 +361,8 @@ actor YoukuMTopClient {
             poster: node["img"] as? String ?? node["poster"] as? String ?? "",
             duration: node["duration"] as? Int ?? 0,
             sourceName: "优酷",
-            isYouku: true
+            isYouku: true,
+            badge: ""
         )
     }
 
@@ -405,6 +408,10 @@ struct VideoItem: Identifiable, Hashable {
     /// 静默跳到**完全不相干的其他节目**（实测搜「庆余年」打开是《知否知否》），
     /// 因此必须在解析阶段过滤掉。
     let isYouku: Bool
+    /// 权益标签（实测取值："VIP" / "付费" / "独播" / "预告" / "免费试看" 等，空=免费）。
+    ///
+    /// 来自搜索接口的 `posterDTO.iconCorner.tagText`，是服务端给出的权威标识。
+    let badge: String
     var id: String { showId }
 }
 

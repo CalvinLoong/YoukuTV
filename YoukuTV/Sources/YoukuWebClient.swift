@@ -63,6 +63,12 @@ actor YoukuWebClient {
             let posterDTO = cd["posterDTO"] as? [String: Any] ?? [:]
             let poster = posterDTO["vThumbUrl"] as? String ?? cd["sourceImg"] as? String ?? ""
 
+            // 权益标签在 posterDTO.iconCorner.tagText
+            // 实测取值："VIP" / "付费" / "独播" / "预告" / "免费试看"，空表示免费。
+            // 这是服务端给出的权威标识，比自行推断可靠。
+            let iconCorner = posterDTO["iconCorner"] as? [String: Any] ?? [:]
+            let badge = iconCorner["tagText"] as? String ?? ""
+
             // feature 形如 "2023 · 电视剧 · 中国 · 共30集"
             let feature = cd["feature"] as? String ?? ""
             let episodeTotal = cd["episodeTotal"] as? Int ?? 0
@@ -78,15 +84,38 @@ actor YoukuWebClient {
 
             return VideoItem(
                 showId: rawShowId,
-                videoId: "",
+                videoId: Self.videoId(in: cd),
                 title: title,
                 subtitle: subtitle,
                 poster: poster,
                 duration: 0,
                 sourceName: sourceName,
-                isYouku: isYouku
+                isYouku: isYouku,
+                badge: badge
             )
         }
+    }
+
+    /// 从搜索结果里提取 vid。
+    ///
+    /// 实测：`commonData.leftButtonDTO.action.value` 形如
+    /// `https://v.youku.com/v_show/id_XMzcxNDY5ODQ4.html`，
+    /// 里面就有可直接播放的 vid。覆盖率 75%~100%。
+    ///
+    /// **这是关键**：优酷的 HTML 播放页有风控（频繁访问会返回验证码页），
+    /// 而搜索接口是纯 JSON、不受影响。有了 vid 就能直接调 ups 取播放地址，
+    /// 完全不必访问 HTML 页面。
+    static func videoId(in commonData: [String: Any]) -> String {
+        let button = commonData["leftButtonDTO"] as? [String: Any] ?? [:]
+        let action = button["action"] as? [String: Any] ?? [:]
+        let url = action["value"] as? String ?? ""
+
+        // 取 /v_show/id_ 与 .html 之间
+        guard let range = url.range(of: "/v_show/id_") else { return "" }
+        let rest = url[range.upperBound...]
+        guard let dot = rest.firstIndex(of: ".") else { return "" }
+        let vid = String(rest[..<dot])
+        return vid.isEmpty ? "" : vid
     }
 
     /// 校验 showId 格式。

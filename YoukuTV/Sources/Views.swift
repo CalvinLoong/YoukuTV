@@ -37,6 +37,24 @@ struct PosterCard: View {
                 } else {
                     placeholder
                 }
+
+                // 权益角标（VIP / 付费 / 独播 / 预告），来自服务端权威字段
+                if !item.badge.isEmpty {
+                    VStack {
+                        HStack {
+                            Text(item.badge)
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.black)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(Palette.accentWarm)
+                                .clipShape(Capsule())
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(7)
+                }
             }
             .frame(width: width, height: width * 9 / 16)
             .clipShape(RoundedRectangle(cornerRadius: 10))
