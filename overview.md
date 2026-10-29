@@ -43,12 +43,30 @@
 
 ### 3. tvOS 应用工程
 
-28 个文件 / 164KB / 1,122 行 Swift，8 个源文件 `swiftc -parse` 全部通过。
+9 个 Swift 源文件 / 2,403 行。
+**已在 GitHub 云端真实编译通过**（Xcode 26.3 / tvOS SDK 26.2 /
+arm64-apple-tvos16.0），零错误零警告。
 
-### 4. 云端编译工作流
+### 4. 云端编译工作流（已跑通）
 
-`.github/workflows/build-tvos-ipa.yml` — 9 步，输出未签名 .ipa，
-YAML 与全部 shell 块已校验通过。
+`.github/workflows/build-tvos-ipa.yml` — 三段式：
+
+```
+plan (ubuntu)  → build (Intel × 2 并行)  → finalize (ubuntu，收敛产物)
+```
+
+实测：从触发到产出 ipa **约 10 分钟**（其中编译 1-2 分钟），
+产物 `YoukuTV-tvos-ipa`（约 230KB）。
+
+**关键点：默认走 Intel 构建机池**（`macos-15-intel` / `macos-26-intel`）。
+GitHub 的 macOS runner 分 arm64 与 intel 两个独立供给池，
+arm64 池官方公告过 capacity constraints（实测排队 15 分钟拿不到机器），
+Intel 池实测秒级拿到。详见 `逆向分析报告.md` 第 13 章。
+
+### 5. 安装包已发布
+
+<https://github.com/CalvinLoong/YoukuTV/releases> — v1.0.0，
+`YoukuTV-unsigned.ipa`（230KB / arm64 / tvOS 16.0+）。
 
 ---
 
@@ -91,13 +109,18 @@ YAML 与全部 shell 块已校验通过。
 
 ---
 
-## 现在你要做的（10 分钟）
+## 现在你要做的（5 分钟）
 
-1. GitHub 注册 → 建**公开**仓库
-2. 把代码传上去（`git push` 或网页拖拽）
-3. Actions → `Build tvOS IPA (unsigned)` → Run workflow
-4. 等 10 分钟，下载 `.ipa`
-5. 装 Sideloadly → 填免费 Apple ID → 装到 Apple TV
+1. 打开 <https://github.com/CalvinLoong/YoukuTV/releases>
+   → 展开 v1.0.0 → 下载 `YoukuTV-unsigned.ipa`
+2. 电脑装 [Sideloadly](https://sideloadly.io)（免费，支持 Apple TV）
+3. Apple TV 和电脑连同一 WiFi
+4. Apple TV → 设置 → 遥控器与设备 → 远程 App 与设备 → 记下配对码
+5. Sideloadly 拖入 ipa → 选 Apple TV → 填免费 Apple ID → Start
+6. Apple TV → 设置 → 通用 → 隐私与安全性 → App 安装 → 信任开发者
+
+**或者直接双击 `安装到AppleTV.command`**，脚本会自动检查安装包、
+引导你走完整个流程。
 
 → 详见 `零成本安装指南.md`
 
@@ -122,18 +145,21 @@ YAML 与全部 shell 块已校验通过。
 
 ```
 YoukuTV/                          应用工程
-├── Sources/                      7 个 Swift 源文件
+├── Sources/                      9 个 Swift 源文件
 ├── Tests/                        协议常量回归测试
 ├── Resources/                    图标 / Info.plist
 ├── project.yml                   XcodeGen 配置
 └── 交付说明.md                    有开发者账号时的完整流程
 
 .github/workflows/                云端编译工作流
-零成本安装指南.md                   ← 你现在该看这个
-逆向分析报告.md                    技术细节
-磁盘清理方案.md                    清理指引
+安装到AppleTV.command             ← 双击就能装（推荐）
+零成本安装指南.md                   ← 详细图文步骤
+逆向分析报告.md                    技术细节（含第 13 章云编译实战）
+输出/YoukuTV-unsigned.ipa          已编译好的安装包
 overview.md                       本文件
+磁盘清理方案.md                    清理指引
 清理缓存.command / 清理应用缓存.command
+tools/                            自研校验脚本（编译/凭据/链路）
 ```
 
 ---

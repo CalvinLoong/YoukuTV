@@ -17,25 +17,29 @@
 | 详情页 / 剧集列表 | ✅ 界面完成 |
 | 视频播放 | ✅ 原生 AVPlayer，多清晰度 + 自动码率 |
 
-**代码 2403 行，9 个 Swift 文件，本地编译零错误零警告。**
-播放链路已用真实网络数据端到端验证通过。
+**代码 2403 行，9 个 Swift 文件。**
+**已在 GitHub 云端真机环境编译通过（Xcode 26.3 / tvOS SDK 26.2，零错误零警告）**，
+安装包已发布到 Releases。播放链路用真实网络数据端到端验证通过。
 
 ---
 
 ## 三步装上
 
-### 1. 触发云端构建
+### 1. 下载安装包（已编译好，直接下）
 
-打开 <https://github.com/CalvinLoong/YoukuTV/actions>
-→ 选 **Build tvOS IPA (unsigned)** → **Run workflow** → 等约 10 分钟
+<https://github.com/CalvinLoong/YoukuTV/releases> → 展开 **v1.0.0** →
+下载 `YoukuTV-unsigned.ipa`（约 230KB）
 
-> 免费账户的 macOS runner 供给紧张，排队几十分钟是常态。
-> 排太久就取消重新触发，或用仓库里的 CircleCI 备用配置。
+> 不想点网页？在访达里双击 `安装到AppleTV.command`，
+> 脚本会自动检查安装包、引导你走完整个流程。
 
-### 2. 下载安装包
+### 2.（可选）自己重新编译
 
-构建完成后，页面底部 **Artifacts** 下载 `YoukuTV-tvos-ipa`，
-解压得到 `YoukuTV-unsigned.ipa`。
+改了代码才需要。打开 <https://github.com/CalvinLoong/YoukuTV/actions>
+→ 选 **Build tvOS IPA (unsigned)** → **Run workflow** → 等约 5-8 分钟。
+
+> 构建机默认走 Intel 池（`macos-*-intel`），实测秒级拿到机器。
+> arm64 池（`macos-latest` / `macos-15`）供给紧张，排队可能十几分钟。
 
 ### 3. 装进 Apple TV
 
@@ -121,8 +125,9 @@ python3 tools/回归测试.py 庆余年 甄嬛传
 
 | 文件 | 内容 |
 |---|---|
-| `逆向分析报告.md` | 1118 行，每条结论标注实测证据，含反例与修正记录 |
+| `逆向分析报告.md` | 1303 行，每条结论标注实测证据，含反例与修正记录 |
 | `零成本安装指南.md` | 面向没有开发背景的用户 |
+| `安装到AppleTV.command` | 一键脚本：检查安装包 → 触发编译 → 下载 → 引导安装 |
 | `overview.md` | 项目总览与技术决策 |
 | `circleci-备用配置.yml` | GitHub 长期排队时的备用 CI 方案 |
 
