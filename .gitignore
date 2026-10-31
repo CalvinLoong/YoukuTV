@@ -3,6 +3,7 @@ YoukuTV/build/
 DerivedData/
 *.ipa
 *.dSYM/
+输出/
 
 # Xcode
 xcuserdata/

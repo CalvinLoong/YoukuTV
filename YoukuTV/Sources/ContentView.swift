@@ -1,7 +1,24 @@
 import SwiftUI
 import AVKit
 
-/// 应用主视图：顶部 Tab 切换 + 内容区。
+/// 应用主视图：NavigationStack 驱动的多级导航。
+///
+/// ## 为什么要用 NavigationStack 的 path
+///
+/// tvOS 遥控器上的「返回 / Menu」键，只有当视图栈是 SwiftUI 的
+/// `NavigationStack` 时才会生效 —— 系统需要知道「栈里还有上一页可以弹」。
+///
+/// 之前的实现用自定义的 `route` 枚举在根视图里 `switch`，
+/// 看上去是「三个页面」，实际上**只有一个视图**，
+/// 遥控器按返回键时系统发现没有可弹出的目标，于是毫无反应 —— 表现为
+/// 「进入视频页后回不去首页」。
+///
+/// 现在改成：
+/// - `@State private var path: [Route]` 持有导航栈
+/// - `NavigationStack(path: $path)` 由系统接管推入/弹出
+/// - 详情页与播放页通过 `.navigationDestination` 注册
+///
+/// 这样遥控器的返回键由系统自动处理，无需手写。
 struct ContentView: View {
     @StateObject private var model = AppViewModel()
     @StateObject private var player = PlayerController()
@@ -9,23 +26,35 @@ struct ContentView: View {
     @FocusState private var isSearchFocused: Bool
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $model.path) {
             ZStack {
                 Palette.background.ignoresSafeArea()
-
-                switch model.route {
+                homeView
+            }
+            .navigationDestination(for: AppViewModel.Route.self) { route in
+                switch route {
                 case .home:
-                    homeView
+                    // 根页面不会出现在栈顶，占位以满足编译器
+                    Color.clear
                 case .detail(let item):
                     DetailView(item: item, model: model, player: player)
                 case .player(let item, let episode):
                     PlayerView(item: item, episode: episode, player: player, model: model)
                 }
             }
-            .toolbar(model.route != .home ? .hidden : .visible, for: .navigationBar)
         }
         .task { await model.bootstrap() }
         .onAppear { model.player = player }
+        // 登录面板用 overlay 实现而不是 sheet：
+        // tvOS 的 sheet 在遥控器上的焦点行为与 iOS 不同，
+        // overlay 可以完全掌控焦点，不会出现「焦点跑丢、按钮点不动」。
+        .overlay {
+            if model.isLoginSheetPresented {
+                LoginSheet(model: model)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: model.isLoginSheetPresented)
     }
 
     // MARK: - 首页
@@ -78,6 +107,9 @@ struct ContentView: View {
             }
 
             Spacer()
+
+            // 登录入口
+            AccountButton(model: model)
 
             // 搜索输入
             HStack(spacing: 8) {
@@ -262,7 +294,7 @@ struct PlayerView: View {
 
                     // 返回详情页，避免用户卡在黑屏
                     Button {
-                        model.route = .detail(item)
+                        model.goBackToDetail()
                     } label: {
                         Label("返回详情", systemImage: "chevron.left")
                             .font(.system(size: 17, weight: .medium))

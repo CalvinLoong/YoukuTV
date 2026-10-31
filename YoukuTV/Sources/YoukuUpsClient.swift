@@ -58,6 +58,8 @@ actor YoukuUpsClient {
     private var token: String = ""
     private var tokenExpiry: Date = .distantPast
     private var cookieStore: [String: String] = [:]
+    /// 登录态 Cookie（ptoken / yktk / ytid）。未登录时为空。
+    private var authCookies: [String: String] = [:]
     private let session: URLSession
 
     /// ckey 提供器。默认用内置的固定值；可通过 `update` 换成新值。
@@ -76,6 +78,30 @@ actor YoukuUpsClient {
         self.credential = credential
     }
 
+    /// 应用登录后的账号凭据。
+    ///
+    /// 未登录时 ups 对会员内容会返回「SUCCESS 但 stream 为空」——
+    /// 服务端校验会员权益后才下发地址。登录后需要把会话凭据带上。
+    ///
+    /// 凭据以 Cookie 形式附加（`ptoken` / `yktk` / `ytid`），
+    /// 这是优酷 Web 端携带登录态的标准方式。
+    func apply(credentials: YoukuCredentials) {
+        guard credentials.isValid else { return }
+        authCookies = [
+            "ptoken": credentials.ptoken,
+            "yktk": credentials.yktk,
+            "ytid": credentials.ytid
+        ].filter { !$0.value.isEmpty }
+        if !credentials.loginAppId.isEmpty {
+            authCookies["loginAppId"] = credentials.loginAppId
+        }
+    }
+
+    /// 清除登录态。
+    func clearCredentials() {
+        authCookies = [:]
+    }
+
     // MARK: - 公开 API
 
     /// 获取指定视频的播放地址。
@@ -86,7 +112,7 @@ actor YoukuUpsClient {
     /// - Returns: 可直接交给 AVPlayer 的播放信息列表，按清晰度从高到低
     func playback(for vid: String, showId: String = "") async throws -> [PlaybackInfo] {
         let data = try await request(vid: vid, showId: showId)
-        guard let streams = data["stream"] as? [[String: Any]] else { return [] }
+        guard let streams = Self.extractStreams(from: data) else { return [] }
 
         var results: [PlaybackInfo] = []
         for stream in streams {
@@ -302,8 +328,13 @@ actor YoukuUpsClient {
     }
 
     private func applyCookies(to request: inout URLRequest) {
-        guard !cookieStore.isEmpty else { return }
-        let value = cookieStore
+        // 合并服务端下发的 cookie 与登录态 cookie
+        var merged = cookieStore
+        for (key, value) in authCookies where !value.isEmpty {
+            merged[key] = value
+        }
+        guard !merged.isEmpty else { return }
+        let value = merged
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: "; ")
         request.setValue(value, forHTTPHeaderField: "Cookie")
@@ -335,6 +366,48 @@ actor YoukuUpsClient {
     }
 
     // MARK: - 工具
+
+    /// 从 ups 响应里取出 stream 列表。
+    ///
+    /// ## 这里有个极易踩的坑（实测）
+    ///
+    /// ups 的 mtop 响应是**三层结构**，不是两层：
+    /// ```
+    /// {
+    ///   "ret": ["SUCCESS::调用成功"],
+    ///   "data": {
+    ///     "cost": 0.109, "psid": "...", "enc": 0,
+    ///     "data": {                       ← 业务体在这一层
+    ///       "stream": [ ... ],            ← 播放流列表在这里
+    ///       "video": {...}, "show": {...}, "ad": {...}
+    ///     }
+    ///   }
+    /// }
+    /// ```
+    /// 之前代码直接读 `data["stream"]`，而 `data` 是「cost/psid/enc/...」那一层，
+    /// **永远取不到 stream**，于是 `playback()` 恒定返回空数组，
+    /// 表现为「点进去能拿到视频但一直转圈、无法播放」。
+    ///
+    /// 这里做成**逐层下探**，兼容不同版本的层数：
+    /// 顶层有 `stream` 就用；没有就进 `data` 找；再没有就进 `data.data` 找。
+    static func extractStreams(from payload: [String: Any]) -> [[String: Any]]? {
+        var queue: [[String: Any]] = [payload]
+        var depth = 0
+        while !queue.isEmpty, depth < 4 {
+            var next: [[String: Any]] = []
+            for dict in queue {
+                if let streams = dict["stream"] as? [[String: Any]], !streams.isEmpty {
+                    return streams
+                }
+                if let inner = dict["data"] as? [String: Any] {
+                    next.append(inner)
+                }
+            }
+            queue = next
+            depth += 1
+        }
+        return nil
+    }
 
     /// 剥离 JSONP 包装。
     static func stripJSONP(_ text: String) -> [String: Any]? {

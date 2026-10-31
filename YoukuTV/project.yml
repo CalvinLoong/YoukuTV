@@ -23,6 +23,13 @@ targets:
     deploymentTarget: "16.0"
     sources:
       - path: Sources
+      # ★ 关键修复：资源目录必须参与编译。
+      # 之前 sources 只有 Sources/，Resources/Assets.xcassets 从未进入构建，
+      # 产出的 .app 里没有 Assets.car —— 于是图标、启动图、Top Shelf 全部缺失，
+      # Home Screen 上显示为空白方块、也没有名称。
+      - path: Resources/Assets.xcassets
+        type: folder
+        buildPhase: resources
     info:
       path: Resources/Info.plist
       properties:
@@ -37,13 +44,23 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         NSLocalNetworkUsageDescription: "用于局域网投屏与设备发现"
+        # tvOS 26+ 的品牌资源：图标与 Top Shelf 图的引用名
+        CFBundleIcons:
+          CFBundlePrimaryIcon:
+            CFBundleIconName: App Icon
+        TVTopShelfImage:
+          TVTopShelfPrimaryImage: Top Shelf Image
+          TVTopShelfPrimaryImageWide: Top Shelf Image Wide
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.workbuddy.youkutv
         PRODUCT_NAME: YoukuTV
         TARGETED_DEVICE_FAMILY: 3
+        # tvOS 26+ 用 brandassets，名字必须与 AppIcon.brandassets 一致
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME: LaunchImage
+        # 强制包含全部图标变体，避免某些配置下只编译部分尺寸
+        ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
         INFOPLIST_KEY_UIUserInterfaceStyle: Dark
         INFOPLIST_KEY_UIBackgroundModes:
           - audio
