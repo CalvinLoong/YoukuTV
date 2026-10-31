@@ -307,19 +307,71 @@ jobs:
         with:
           pattern: YoukuTV-tvos-ipa-*
           path: downloaded
-          merge-multiple: true
+          # ★ 不要开 merge-multiple！
+          #   每个 artifact 里的文件都叫 YoukuTV-unsigned.ipa，
+          #   合并到同一目录时会互相覆盖，产出字节损坏的包
+          #   （实测：merged 产物与任一单路产物 53 万字节不同，CRC 校验失败）。
+          #   保持每个 artifact 一个子目录，后面逐个下载校验。
 
       - name: Publish
         run: |
           set -e
           mkdir -p downloaded
-          IPA=$(find downloaded -name "*.ipa" | head -1)
-          if [ -z "$IPA" ]; then
-            echo "::error::所有构建路都没有产出 ipa"
+
+          # 逐个校验各路产物，只发布第一个完全通过的
+          # （校验逻辑与 tools/校验IPA.py 同源，见下方 python3 - <<'PY'）
+          OK=""
+          for IPA in $(find downloaded -name "*.ipa" | sort); do
+            echo "--- 校验 $IPA ---"
+            if python3 - "$IPA" <<'PY'
+          import sys, zipfile, plistlib
+          ipa = sys.argv[1]
+          try:
+              with zipfile.ZipFile(ipa) as z:
+                  bad = z.testzip()
+                  if bad:
+                      print(f"  ✗ 损坏条目：{bad}")
+                      sys.exit(1)
+                  names = z.namelist()
+                  if len(names) != len(set(names)):
+                      print("  ✗ 存在重复条目")
+                      sys.exit(1)
+                  tops = {n.split("/")[0] for n in names}
+                  if tops != {"Payload"}:
+                      print(f"  ✗ 条目前缀不对：{sorted(tops)}")
+                      sys.exit(1)
+                  for need in ("Payload/YoukuTV.app/YoukuTV",
+                               "Payload/YoukuTV.app/Info.plist",
+                               "Payload/YoukuTV.app/Assets.car"):
+                      if need not in names:
+                          print(f"  ✗ 缺少 {need}")
+                          sys.exit(1)
+                  pl = plistlib.loads(z.read("Payload/YoukuTV.app/Info.plist"))
+                  icon = (pl.get("CFBundleIcons") or {}).get("CFBundlePrimaryIcon")
+                  if not icon:
+                      print("  ✗ Info.plist 缺图标键")
+                      sys.exit(1)
+                  print(f"  ✓ 通过（{len(names)} 条目，图标={icon}）")
+          except SystemExit:
+              raise
+          except Exception as e:
+              print(f"  ✗ 校验异常：{e}")
+              sys.exit(1)
+          PY
+            then
+              OK="$IPA"
+              break
+            fi
+          done
+
+          if [ -z "$OK" ]; then
+            echo "::error::所有构建路的 ipa 都没通过校验"
             ls -R downloaded || true
             exit 1
           fi
-          cp "$IPA" YoukuTV-unsigned.ipa
+
+          echo "✓ 采用：$OK"
+          cp "$OK" YoukuTV-unsigned.ipa
           ls -la YoukuTV-unsigned.ipa
           {
             echo "## ✅ 拿到 tvOS IPA"
