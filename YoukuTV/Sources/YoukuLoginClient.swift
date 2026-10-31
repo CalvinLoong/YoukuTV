@@ -106,7 +106,12 @@ actor YoukuLoginClient {
             throw YoukuError.decodingFailed("登录接口未返回数据")
         }
         // code == 3000 表示生成成功
-        let code = payload["code"] as? Int ?? 0
+        //
+        // ★ 坑：服务端返回的 code 是**字符串** "3000"，不是数字 3000。
+        //   早期版本写成 `as? Int` 会静默失败得到 0，
+        //   于是走进 error 分支报「二维码生成失败：成功」——一个自相矛盾的错误。
+        //   JSONSerialization 不做类型转换，必须两种都试。
+        let code = Self.intValue(payload["code"])
         guard code == 3000 else {
             let message = payload["message"] as? String ?? "未知错误"
             throw YoukuError.mtop("二维码生成失败：\(message)")
@@ -164,7 +169,7 @@ actor YoukuLoginClient {
             throw YoukuError.decodingFailed("轮询接口未返回数据")
         }
 
-        let code = payload["code"] as? Int ?? 0
+        let code = Self.intValue(payload["code"])
         switch code {
         case 14030:
             return .waiting
@@ -317,6 +322,24 @@ actor YoukuLoginClient {
         guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
               let s = String(data: data, encoding: .utf8) else { return "{}" }
         return s
+    }
+
+    /// 宽松地取整数值。
+    ///
+    /// mtop 的 `code` 字段在不同接口上类型不统一：
+    ///   · Havana 登录接口 → 字符串 `"3000"`
+    ///   · ups 播放接口   → 有时是数字 `3000`
+    ///
+    /// `JSONSerialization` 不做隐式类型转换，直接 `as? Int` 会静默失败。
+    /// 历史上就因为这一点，扫码登录在 App 里必然失败
+    /// （报「二维码生成失败：成功」这种自相矛盾的错）。
+    static func intValue(_ raw: Any?) -> Int {
+        switch raw {
+        case let value as Int: return value
+        case let value as String: return Int(value) ?? 0
+        case let value as NSNumber: return value.intValue
+        default: return 0
+        }
     }
 
     static func stripJSONP(_ text: String) -> [String: Any]? {
