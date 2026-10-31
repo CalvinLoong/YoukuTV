@@ -216,6 +216,30 @@ jobs:
           test -f "build/Payload/${APP_NAME}.app/Info.plist" || {
             echo "::error::Payload 结构异常"; exit 1; }
 
+          # ★ 资源校验：Assets.car 必须存在
+          #
+          # 背景：曾经因为 project.yml 的 sources 只包含 Sources/，
+          # Assets.xcassets 从未参与编译，产出的 .app 里没有 Assets.car，
+          # 结果侧载到 Apple TV 后图标空白、名称不显示、
+          # 且因为缺 2x 启动图而进入 1/4 屏兼容模式。
+          # 这类问题必须在 CI 就暴露，不能等用户装到电视上才发现。
+          if [ ! -f "build/Payload/${APP_NAME}.app/Assets.car" ]; then {
+            echo "::error::Assets.car 缺失 —— 资源目录没有参与编译"
+            echo "检查 project.yml 的 sources 是否包含 Resources/Assets.xcassets（type 必须是 file）"
+            echo "当前 .app 内容："
+            ls -la "build/Payload/${APP_NAME}.app/"
+            exit 1
+          }; fi
+          echo "✓ Assets.car 存在（$(du -h "build/Payload/${APP_NAME}.app/Assets.car" | cut -f1)）"
+
+          # 校验图标与启动图确实编进了 Assets.car
+          echo "--- Assets.car 内容抽样 ---"
+          xcrun assetutil --info "build/Payload/${APP_NAME}.app/Assets.car" 2>/dev/null \
+            | head -30 || strings "build/Payload/${APP_NAME}.app/Assets.car" | grep -iE "AppIcon|BrandAssets|LaunchImage" | head -10 || true
+
+          # 校验 Info.plist 里的图标引用键
+          plutil -p "build/Payload/${APP_NAME}.app/Info.plist" | grep -iE "CFBundleDisplayName|CFBundleIconName|TVTopShelf" || true
+
           cd build
           zip -qry "YoukuTV-unsigned.ipa" Payload
           cd ..

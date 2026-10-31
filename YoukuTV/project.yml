@@ -27,8 +27,14 @@ targets:
       # 之前 sources 只有 Sources/，Resources/Assets.xcassets 从未进入构建，
       # 产出的 .app 里没有 Assets.car —— 于是图标、启动图、Top Shelf 全部缺失，
       # Home Screen 上显示为空白方块、也没有名称。
+      #
+      # type 必须是 file（单一文件引用）：
+      #   · type: folder → 被当普通文件夹原样拷贝进包，不经 actool 编译
+      #   · type: group  → 被展开成 PBXGroup 子项，同样不是资源文件引用
+      #   · type: file   → 生成 lastKnownFileType = folder.assetcatalog 的
+      #                    PBXFileReference，actool 才会编译出 Assets.car
       - path: Resources/Assets.xcassets
-        type: folder
+        type: file
         buildPhase: resources
     info:
       path: Resources/Info.plist
