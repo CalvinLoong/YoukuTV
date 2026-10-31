@@ -157,6 +157,30 @@ check(await store.all().count == 1, "删除一条生效")
 await store.clear()
 check(await store.all().isEmpty, "清空生效")
 
+// MARK: - 6. 端到端：首页推荐项 → 直接取流能播
+
+print("\n=== 6. 端到端：首页推荐项直接取流 ===")
+do {
+    let result = try await home.loadHome()
+    // 拿第一条推荐项的 vid —— 这就是用户在电视上点「播放」时走的那条路
+    guard let firstItem = result.rows.flatMap(\.items).first(where: { !$0.videoId.isEmpty }) else {
+        check(false, "首页有带 vid 的推荐项")
+        throw YoukuError.decodingFailed("无可测推荐项")
+    }
+    print("     · 测项：「\(firstItem.title)」 vid=\(firstItem.videoId)")
+
+    let list = try await ups.playback(for: firstItem.videoId, showId: firstItem.showId)
+    check(!list.isEmpty, "首页推荐的 vid 直接取到播放地址", "count=\(list.count)")
+    if let best = list.first {
+        print("     · 首选：\(best.quality.rawValue)  \(best.streamType)  \(best.url.absoluteString.prefix(80))")
+    }
+    // 至少要有一条能被 AVPlayer 直接加载的地址（http 直连或本地主播放列表）
+    let playable = list.first { $0.url.scheme == "http" || $0.url.isFileURL }
+    check(playable != nil, "存在可直接交给 AVPlayer 的地址")
+} catch {
+    check(false, "端到端取流失败", "\(error)")
+}
+
 // MARK: - 汇总
 
 print("\n" + String(repeating: "─", count: 60))

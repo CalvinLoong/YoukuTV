@@ -121,8 +121,8 @@ actor YoukuHomeClient {
                 //   或响应体里出现 _____tmd_____/punish。
                 //   这跟「SSR 没就绪」是两种完全不同的失败，必须分开报，
                 //   否则上层会一直无脑重试，错误信息也没法指导用户。
-                let punished = (response as? HTTPURLResponse)
-                    .value(forHTTPHeaderField: "bxpunish") == "1"
+                let http = response as? HTTPURLResponse
+                let punished = http?.value(forHTTPHeaderField: "bxpunish") == "1"
                     || html.contains("_____tmd_____/punish")
                 if punished {
                     throw YoukuError.decodingFailed("触发优酷风控（需等待约 20 秒后重试）")

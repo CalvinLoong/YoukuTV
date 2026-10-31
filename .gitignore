@@ -21,6 +21,7 @@ evidence/
 tools/*
 !tools/*.py
 !tools/集成验证/
+!tools/登录联调/
 *.dex
 *.apk
 *.so

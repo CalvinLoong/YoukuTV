@@ -12,6 +12,7 @@ mkdir -p "$OUT"
 swiftc -O \
   -target arm64-apple-macosx13.0 \
   "$ROOT/tools/登录联调/YoukuErrorShim.swift" \
+  "$ROOT/YoukuTV/Sources/MTopQuery.swift" \
   "$ROOT/YoukuTV/Sources/YoukuLoginClient.swift" \
   "$ROOT/tools/登录联调/测试/main.swift" \
   -o "$OUT/youku-cred-test"
