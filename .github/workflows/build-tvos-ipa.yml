@@ -255,7 +255,10 @@ jobs:
           # 产出的 ipa 结构损坏（实测：Info.plist 出现两次、
           # 中央目录起始位置错乱、Sideloadly 解不开）。
           # Python 的 zipfile 行为确定，产出的包一定能被正确解开。
-          python3 tools/打包IPA.py "$APP_NAME" Payload
+          #
+          # 注意路径：Payload 在 build/ 下，产物直接写回 build/，
+          # 后面的 upload-artifact 找的是 YoukuTV/build/YoukuTV-unsigned.ipa。
+          python3 tools/打包IPA.py "$APP_NAME" build/Payload build/YoukuTV-unsigned.ipa
           ls -la build/*.ipa
           echo "::notice::IPA 构建完成"
 

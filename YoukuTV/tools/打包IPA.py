@@ -18,7 +18,7 @@ Python 的 `zipfile` 行为确定，产出的包一定能被正确解开。
 
 ## 用法
 
-    python3 打包IPA.py <AppName> [Payload目录]
+    python3 打包IPA.py <AppName> [Payload目录] [输出ipa路径]
 """
 import os
 import sys
@@ -27,28 +27,36 @@ import zipfile
 
 def main():
     if len(sys.argv) < 2:
-        print("用法: python3 打包IPA.py <AppName> [Payload目录]", file=sys.stderr)
+        print("用法: python3 打包IPA.py <AppName> [Payload目录] [输出路径]", file=sys.stderr)
         return 1
 
     app_name = sys.argv[1]
     payload = sys.argv[2] if len(sys.argv) > 2 else "Payload"
-    out = "YoukuTV-unsigned.ipa"
+    out = sys.argv[3] if len(sys.argv) > 3 else "YoukuTV-unsigned.ipa"
 
     if not os.path.isdir(payload):
         print(f"::error::找不到 Payload 目录：{payload}")
         return 1
 
+    out_dir = os.path.dirname(os.path.abspath(out))
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     if os.path.exists(out):
         os.remove(out)
 
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        # ★ IPA 规范要求条目路径以 "Payload/" 开头，
+        #   不能带上 Payload 目录自身的父路径（例如 build/Payload/...）。
+        base = os.path.basename(payload.rstrip("/"))
         for root, dirs, files in os.walk(payload):
             for d in sorted(dirs):
                 p = os.path.join(root, d)
-                z.write(p, os.path.relpath(p, "."))
+                arc = f"{base}/{os.path.relpath(p, payload)}"
+                z.write(p, arc)
             for f in sorted(files):
                 p = os.path.join(root, f)
-                z.write(p, os.path.relpath(p, "."))
+                arc = f"{base}/{os.path.relpath(p, payload)}"
+                z.write(p, arc)
 
     # 自检：条目必须能完整读出且 CRC 正确
     with zipfile.ZipFile(out) as z:
@@ -63,13 +71,14 @@ def main():
             print("  ", n)
 
         need = [
-            f"{payload}/{app_name}.app/{app_name}",
-            f"{payload}/{app_name}.app/Info.plist",
-            f"{payload}/{app_name}.app/Assets.car",
+            f"{base}/{app_name}.app/{app_name}",
+            f"{base}/{app_name}.app/Info.plist",
+            f"{base}/{app_name}.app/Assets.car",
         ]
         for req in need:
             if req not in names:
                 print(f"::error::IPA 缺少关键条目：{req}")
+                print("（提示：主程序缺失通常说明 .app 目录本身不完整）")
                 return 1
 
         # 不得有重复条目（macOS zip 的经典故障）
