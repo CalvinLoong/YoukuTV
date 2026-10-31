@@ -44,3 +44,6 @@ h5js/
 # 本地编译检查产物
 *.o
 *.swiftmodule
+
+# 构建产物与本地联调输出
+build/
