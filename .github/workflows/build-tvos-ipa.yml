@@ -232,17 +232,30 @@ jobs:
           }; fi
           echo "✓ Assets.car 存在（$(du -h "build/Payload/${APP_NAME}.app/Assets.car" | cut -f1)）"
 
+          # 校验主程序存在且架构正确
+          if [ ! -f "build/Payload/${APP_NAME}.app/${APP_NAME}" ]; then {
+            echo "::error::主程序缺失"
+            ls -la "build/Payload/${APP_NAME}.app/"
+            exit 1
+          }; fi
+          echo "✓ 主程序存在"
+          lipo -info "build/Payload/${APP_NAME}.app/${APP_NAME}" 2>/dev/null || true
+
           # 校验图标与启动图确实编进了 Assets.car
           echo "--- Assets.car 内容抽样 ---"
           xcrun assetutil --info "build/Payload/${APP_NAME}.app/Assets.car" 2>/dev/null \
-            | head -30 || strings "build/Payload/${APP_NAME}.app/Assets.car" | grep -iE "AppIcon|BrandAssets|LaunchImage" | head -10 || true
+            | grep -iE "Name|RenditionName|AppIcon|BrandAssets|LaunchImage" | head -20 || true
 
           # 校验 Info.plist 里的图标引用键
           plutil -p "build/Payload/${APP_NAME}.app/Info.plist" | grep -iE "CFBundleDisplayName|CFBundleIconName|TVTopShelf" || true
 
-          cd build
-          zip -qry "YoukuTV-unsigned.ipa" Payload
-          cd ..
+          # ★ 用 Python 打包，不用 macOS 的 zip
+          #
+          # macOS 自带的 zip 在追加场景下会把中央目录写进文件中间，
+          # 产出的 ipa 结构损坏（实测：Info.plist 出现两次、
+          # 中央目录起始位置错乱、Sideloadly 解不开）。
+          # Python 的 zipfile 行为确定，产出的包一定能被正确解开。
+          python3 tools/打包IPA.py "$APP_NAME" Payload
           ls -la build/*.ipa
           echo "::notice::IPA 构建完成"
 
