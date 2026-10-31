@@ -4,11 +4,14 @@ import SwiftUI
 ///
 /// ## 数据通道
 ///
-/// - **搜索与推荐**：`search.youku.com/api/search`（免签名，已实测返回真实数据）
+/// - **首页推荐**：`www.youku.com` 的 SSR 数据（`window.__INITIAL_DATA__`）
+///   —— 真实推荐位、频道导航、海报墙，见 `YoukuHomeClient`
+/// - **频道页**：优酷没有开放免签名的频道接口，用搜索接口按频道关键词取海报墙
 /// - **播放地址**：`un-acs.youku.com` 的 `mtop.youku.play.ups.appinfo.get`
 ///   （经实测：ckey 不绑定 vid，同一份凭据可取任意视频的播放地址）
 /// - **扫码登录**：`acs.youku.com` 的 Havana 链路
 ///   （`mtop.taobao.commonuse.mloginService.genQrCode` / `.qrcodelogin`）
+/// - **观看历史**：本机持久化（`YoukuHistoryStore`）
 @MainActor
 final class AppViewModel: ObservableObject {
     /// 导航目标。必须是 `Hashable` 才能放进 `NavigationStack` 的 path。
@@ -30,12 +33,17 @@ final class AppViewModel: ObservableObject {
     @Published var path: [Route] = []
     @Published private(set) var rows: [Row] = []
     @Published private(set) var episodes: [Episode] = []
+    @Published private(set) var channels: [YoukuHomeClient.Channel] = []
+    @Published private(set) var history: [YoukuHistoryStore.Entry] = []
     @Published private(set) var playbacks: [PlaybackInfo] = []
     @Published private(set) var isLoading = false
     @Published private(set) var isLoadingEpisodes = false
     @Published private(set) var isLoadingPlayback = false
     @Published var errorMessage: String?
     @Published var searchKeyword = ""
+
+    /// 当前选中的频道（顶部导航）
+    @Published private(set) var selectedChannelID = "WEBHOME"
 
     /// 登录态
     @Published private(set) var credentials: YoukuCredentials?
@@ -70,6 +78,8 @@ final class AppViewModel: ObservableObject {
     private let ups = YoukuUpsClient()
     private let episodeClient = YoukuEpisodeClient()
     private let loginClient = YoukuLoginClient()
+    private let homeClient = YoukuHomeClient()
+    private let historyStore = YoukuHistoryStore()
 
     /// 播放器引用，由 ContentView 注入。
     @MainActor weak var player: PlayerController?
@@ -84,40 +94,112 @@ final class AppViewModel: ObservableObject {
            saved.isValid {
             credentials = saved
         }
+        // 恢复观看历史（init 不能 await，这里同步读一次）
+        history = YoukuHistoryStore.loadSynchronously()
     }
 
     // MARK: - 首页
 
     /// 加载首页推荐。
+    ///
+    /// 顺序：先取本机历史（同步、快），再取优酷 SSR 首页（慢、要重试）。
+    /// 首页推荐拿到后会把历史作为第一行插回去。
     func bootstrap() async {
         guard rows.isEmpty else { return }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
 
+        // 历史先渲染，别让用户对着空屏等网络
+        history = await historyStore.all()
+
+        do {
+            let home = try await homeClient.loadHome()
+            channels = home.channels
+            rows = home.rows.map {
+                Row(id: $0.id, title: $0.title, items: $0.items)
+            }
+            prependHistoryRow()
+            if rows.isEmpty {
+                errorMessage = "首页数据为空，请稍后重试"
+            }
+        } catch {
+            // 首页拿不到时退回搜索兜底，至少保证有内容可看
+            await loadFallbackRows()
+        }
+    }
+
+    /// 首页拿不到时的兜底：用搜索接口拼几行。
+    private func loadFallbackRows() async {
         var collected: [Row] = []
         for (title, keyword) in YoukuWebClient.hotKeywords {
-            do {
-                let items = try await web.search(keyword: keyword, page: 1)
-                if !items.isEmpty {
-                    collected.append(Row(id: keyword, title: title, items: items))
-                }
-            } catch {
-                continue
-            }
+            guard let items = try? await web.search(keyword: keyword, page: 1),
+                  !items.isEmpty else { continue }
+            collected.append(Row(id: keyword, title: title, items: items))
         }
         if collected.isEmpty {
             errorMessage = "无法连接优酷接口，请检查网络"
         } else {
             rows = collected
+            prependHistoryRow()
         }
+    }
+
+    /// 把「继续观看」行插到最前面。
+    private func prependHistoryRow() {
+        guard !history.isEmpty else { return }
+        let items = history.map { entry in
+            VideoItem(
+                showId: entry.showId,
+                videoId: entry.videoId,
+                title: entry.title,
+                subtitle: entry.subtitle,
+                poster: entry.poster,
+                duration: entry.duration,
+                sourceName: "优酷",
+                isYouku: true,
+                badge: entry.position > 0 ? "已看 \(Int(entry.progress * 100))%" : ""
+            )
+        }
+        let row = Row(id: "history", title: "继续观看", items: items)
+        rows.removeAll { $0.id == "history" }
+        rows.insert(row, at: 0)
+    }
+
+    /// 切换顶部频道。
+    func selectChannel(_ channel: YoukuHomeClient.Channel) {
+        guard channel.id != selectedChannelID else { return }
+        selectedChannelID = channel.id
+
+        if channel.isHome {
+            Task { await bootstrap(force: true) }
+            return
+        }
+
+        // 频道页：优酷没开放免签名的频道接口，用频道分类词走搜索取海报墙
+        isLoading = true
+        defer { isLoading = false }
+        Task {
+            if let items = try? await web.search(keyword: channel.category, page: 1),
+               !items.isEmpty {
+                rows = [Row(id: "channel-\(channel.id)",
+                            title: channel.title,
+                            items: items)]
+            }
+        }
+    }
+
+    /// 强制重新加载首页。
+    func bootstrap(force: Bool) async {
+        if force { rows = [] }
+        await bootstrap()
     }
 
     /// 执行搜索。
     func performSearch() async {
         let keyword = searchKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !keyword.isEmpty else {
-            await bootstrap()
+            await bootstrap(force: true)
             return
         }
         isLoading = true
@@ -187,7 +269,7 @@ final class AppViewModel: ObservableObject {
     private func pollUntilFinished(token: String) async {
         // 最多轮询 5 分钟（二维码有效期通常 3~5 分钟）
         let deadline = Date().addingTimeInterval(300)
-        var interval = 3.0
+        let interval = 3.0
 
         while Date() < deadline {
             // 二维码需要用户在手机上确认，等待间隔由服务端给出（3 秒）
@@ -233,7 +315,7 @@ final class AppViewModel: ObservableObject {
     ///
     /// **注意**：优酷对 HTML 页面访问有风控，频繁请求会返回验证码页
     /// （`window._config_.action == "captcha"`）。因此这条路径是**补充**而非必需：
-    /// 播放本身不依赖它 —— 搜索接口的 `leftButtonDTO` 已经带了 vid，
+    /// 播放本身不依赖它 —— 首页推荐和搜索结果里已经带了 vid，
     /// 拿不到选集也照样能播放当前集。
     func loadEpisodes(for item: VideoItem) async {
         isLoadingEpisodes = true
@@ -248,7 +330,7 @@ final class AppViewModel: ObservableObject {
                 episodeTotal = detail.episodeTotal
             }
         } catch {
-            // 拿不到选集不影响播放：搜索结果里已经带了 vid
+            // 拿不到选集不影响播放：首页推荐里已经带了 vid
             episodes = []
             hasEpisodeList = false
         }
@@ -268,7 +350,7 @@ final class AppViewModel: ObservableObject {
         player?.errorMessage = nil
         defer { isLoadingPlayback = false }
 
-        // 优先用选集里的 vid；没有就回落到详情页拿到的当前集 vid
+        // 优先用选集里的 vid；没有就回落到推荐/详情页拿到的 vid
         var vid: String = ""
         if let episodeVid = episode?.videoId, !episodeVid.isEmpty {
             vid = episodeVid
@@ -299,6 +381,8 @@ final class AppViewModel: ObservableObject {
             playbacks = list
             if let best = list.first {
                 player?.play(best, title: episode?.title ?? item.title)
+                // 记一条观看历史，首页的「继续观看」用
+                await recordHistory(item: item, episode: episode, vid: vid)
             } else if item.badge == "VIP" || item.badge == "付费" || episode?.isVip == true {
                 // 实测：会员内容在未登录状态下接口返回 SUCCESS 但 stream 为空，
                 // 服务端校验会员权益后才下发地址。登录后即可正常播放。
@@ -311,6 +395,28 @@ final class AppViewModel: ObservableObject {
         } catch {
             errorMessage = (error as? YoukuError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    /// 写入观看历史。
+    private func recordHistory(item: VideoItem, episode: Episode?, vid: String) async {
+        await historyStore.record(
+            showId: item.showId,
+            videoId: vid,
+            title: item.title,
+            poster: item.poster,
+            subtitle: episode?.title ?? item.subtitle,
+            position: 0,
+            duration: 0
+        )
+        history = await historyStore.all()
+        prependHistoryRow()
+    }
+
+    /// 删除一条历史记录。
+    func removeHistory(_ entry: YoukuHistoryStore.Entry) async {
+        await historyStore.remove(entry)
+        history = await historyStore.all()
+        prependHistoryRow()
     }
 
     /// 切换清晰度。

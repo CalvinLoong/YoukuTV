@@ -93,17 +93,42 @@ struct ContentView: View {
                     .foregroundStyle(Palette.primaryText)
             }
 
-            // 分类快捷入口（走已验证可用的优酷 H5 搜索通道）
-            ForEach(YoukuWebClient.hotKeywords, id: \.title) { entry in
-                Button {
-                    model.searchKeyword = entry.keyword
-                    Task { await model.performSearch() }
-                } label: {
-                    Text(entry.title)
-                        .font(.system(size: 17, weight: .regular))
-                        .foregroundStyle(Palette.secondaryText)
+            // 顶部频道导航。数据来自优酷首页 SSR 的 navList，
+            // 是服务端下发的真实频道（首页/电视剧/动漫/电影/综艺/纪录片…）。
+            if model.channels.isEmpty {
+                // 首页数据还没到 —— 先用本地兜底分类，不让导航区空白
+                ForEach(YoukuWebClient.hotKeywords, id: \.title) { entry in
+                    Button {
+                        model.searchKeyword = entry.keyword
+                        Task { await model.performSearch() }
+                    } label: {
+                        Text(entry.title)
+                            .font(.system(size: 17, weight: .regular))
+                            .foregroundStyle(Palette.secondaryText)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+            } else {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 22) {
+                        ForEach(model.channels) { channel in
+                            Button {
+                                model.selectChannel(channel)
+                            } label: {
+                                Text(channel.title)
+                                    .font(.system(size: 17,
+                                                 weight: model.selectedChannelID == channel.id
+                                                    ? .bold : .regular))
+                                    .foregroundStyle(model.selectedChannelID == channel.id
+                                                     ? Palette.accent
+                                                     : Palette.secondaryText)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+                .frame(maxWidth: 1100)
             }
 
             Spacer()

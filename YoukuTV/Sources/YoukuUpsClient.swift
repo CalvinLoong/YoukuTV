@@ -178,25 +178,32 @@ actor YoukuUpsClient {
         let timestamp = String(Int(Date().timeIntervalSince1970 * 1000))
         let sign = Self.md5Hex("\(token)&\(timestamp)&\(Self.appKey)&\(data)")
 
-        var components = URLComponents(
-            string: "https://\(Self.host)/h5/\(Self.api)/\(Self.version)/"
-        )!
-        components.queryItems = [
-            .init(name: "jsv", value: "2.6.1"),
-            .init(name: "appKey", value: Self.appKey),
-            .init(name: "t", value: timestamp),
-            .init(name: "sign", value: sign),
-            .init(name: "api", value: Self.api),
-            .init(name: "v", value: Self.version),
-            .init(name: "timeout", value: "15000"),
-            .init(name: "type", value: "jsonp"),
-            .init(name: "dataType", value: "jsonp"),
-            .init(name: "callback", value: "mtopjsonp1"),
-            .init(name: "data", value: data),
-            .init(name: "ttid", value: Self.ttid)
-        ]
+        // ★ 必须用 MTopQuery（严格百分号编码），不能用 URLComponents.queryItems。
+        //   后者会把 ckey 里的 `+` 原样输出，服务端按 query 规则解码成空格 →
+        //   签名对不上 → `FAIL_SYS_ILLEGAL_ACCESS:非法请求`（实测 A/B 确认）。
+        guard let url = MTopQuery.url(
+            host: Self.host,
+            api: Self.api,
+            version: Self.version,
+            items: [
+                ("jsv", "2.6.1"),
+                ("appKey", Self.appKey),
+                ("t", timestamp),
+                ("sign", sign),
+                ("api", Self.api),
+                ("v", Self.version),
+                ("timeout", "15000"),
+                ("type", "jsonp"),
+                ("dataType", "jsonp"),
+                ("callback", "mtopjsonp1"),
+                ("data", data),
+                ("ttid", Self.ttid)
+            ]
+        ) else {
+            throw YoukuError.invalidResponse
+        }
 
-        var request = URLRequest(url: components.url!)
+        var request = URLRequest(url: url)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("https://v.youku.com/", forHTTPHeaderField: "Referer")
         request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
@@ -213,14 +220,25 @@ actor YoukuUpsClient {
         guard (200..<300).contains(http.statusCode) else {
             throw YoukuError.httpStatus(http.statusCode)
         }
-        guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
-            throw YoukuError.decodingFailed(text.prefix(200).description)
-        }
-
-        // 剥离 JSONP 包装：mtopjsonp1({...})
-        var payloadObject = json
+        // ★ 必须**先剥 JSONP 包装再解析**。
+        //
+        //   ups 用的是 `type=jsonp&dataType=jsonp&callback=mtopjsonp1`，
+        //   响应体长这样：`mtopjsonp1({"ret":[...],"data":{...}})` —— 它**不是**裸 JSON。
+        //
+        //   早期版本先 `JSONSerialization.jsonObject(with: body)`（必然失败），
+        //   再去剥包装，顺序反了 → 100% 抛 `解析失败`，而且错误信息里带的
+        //   正是那串 JSONP 原文。电视上表现为「点进视频一直转圈、播不出来」。
+        //
+        //   注意：解析失败时把原始响应带进错误信息，会让服务端返回的
+        //   `FAIL_SYS_ILLEGAL_ACCESS` 等真实原因被淹没 —— 这也是当初
+        //   定位困难的原因之一。
+        let payloadObject: [String: Any]
         if let inner = Self.stripJSONP(text) {
             payloadObject = inner
+        } else if let raw = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+            payloadObject = raw
+        } else {
+            throw YoukuError.decodingFailed(text.prefix(200).description)
         }
 
         if let ret = payloadObject["ret"] as? [String],
@@ -305,15 +323,19 @@ actor YoukuUpsClient {
 
     /// 触发服务端下发 `_m_h5_tk`。
     private func primeToken() async throws {
-        var components = URLComponents(
-            string: "https://\(Self.host)/h5/\(Self.api)/\(Self.version)/"
-        )!
-        components.queryItems = [
-            .init(name: "appKey", value: Self.appKey),
-            .init(name: "api", value: Self.api),
-            .init(name: "v", value: Self.version)
-        ]
-        var request = URLRequest(url: components.url!)
+        guard let url = MTopQuery.url(
+            host: Self.host,
+            api: Self.api,
+            version: Self.version,
+            items: [
+                ("appKey", Self.appKey),
+                ("api", Self.api),
+                ("v", Self.version)
+            ]
+        ) else {
+            throw YoukuError.invalidResponse
+        }
+        var request = URLRequest(url: url)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         applyCookies(to: &request)
         // 服务端在响应头里下发 _m_h5_tk，必须把 cookies 收走，
@@ -467,9 +489,15 @@ actor YoukuUpsClient {
         let name = "yk_master_\(sanitized).m3u8"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
 
-        // 内容里的换行是字面量 "\n"（两字符），需还原成真实换行
+        // 归一化换行。
+        //
+        // 实测这份清单在 JSON 里的 `\r\n` 会被 JSONSerialization 解码成
+        // **真实 CR/LF 字符**（不是字面量反斜杠），直接写盘就是标准 HLS，
+        // AVPlayer 能正常解析。
+        // 下面两条替换是兜底：万一某些响应把换行双重转义成字面量 `\n`，
+        // 也能还原成真换行，避免 AVPlayer 解析失败。
         let normalized = content
-            .replacingOccurrences(of: "\\r\\n", with: "\n")
+            .replacingOccurrences(of: "\\r\\n", with: "\r\n")
             .replacingOccurrences(of: "\\n", with: "\n")
 
         do {
@@ -524,6 +552,9 @@ struct UpsCredential: Codable, Equatable {
     /// 数据来源：由真实浏览器访问优酷播放页时 AWSC 生成，经实测可用
     /// （同一天内可取任意 vid 的播放地址）。
     /// 当服务端轮换导致失效时，App 会提示更新；凭据可通过网络配置下发更新。
+    /// 内置 ckey。供集成验证工具断言编码行为用。
+    static var builtinCkeyForTest: String { builtin.ckey }
+
     static let builtin = UpsCredential(
         ckey: "140#o8foFD6ezzWioQo2+bhu4pN8s9DfVoO52wuS/WRX/zGIMrMVf7dtiRzmxLATDWpY4FiWlp1zzRn0a2/SGFzxSx8za3h/zzrb22U3lp1xzCQiVXE/tFzx2Dc33b/BeHmijDapVrMn3rNmgkYEG5R5hPU4n8fKJKz0pKziPLYJIk1oX2QDQBoq3uz3pNJtDTp+wlAAJzY7a7oluQAA9ORe8Sk54uGspJd4oAqJKt6+jyGmx7j1Q/exmOk1UNGBkAOA80quTu/lBy2YR2j+9gFgjrHwuZVlN2162HflgwbOoyP/9DDGY60zrA6QEmMT+J7aVaXv+sUoBtcHXL7wyk0Hn9oTOcR8nqH9VTCfDHIHXLSYitT+OtVps49ybWAYQ/3LR0tOzh14nuweR69asPm0QRbSwqtEOzQ68vkO+1K6ieM509aqaxu8dQIwSxf5b95zz6m/dMDdEBKRba/sGR9LqDebjhcf5nT6WuSdeNJFOXWmWa9myBdjrWObmaEopgMYRWcxQJnfmnEN7vqdhwIPeQ3ExmrriutZ3aZh6uSuaOEDr+ZhNvY38yaDg/4E5v8gJ4CbQmY37wSnz3Py2R5Qvl4hIHEUXsFkicYkff82iTrfGSYQF8/s4tG7ZSr1fzcYPbZITZIjwiaJ+UWbcSy5nB+WG7afir+ULOCB6F/bcf0py5mgUyM5JodiH8vRFNgD3ElWpr5CBMXTarIhmbB57QSphuaGCdSJ8ki+TV+PtpsHUbviG6UVUopMeQxNcyeMkN0ddgdNFgC3huHE",
         utid: "Dg5qI8+GsDsCAavdUaZcHoaR",

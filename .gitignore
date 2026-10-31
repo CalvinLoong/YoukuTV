@@ -20,6 +20,7 @@ evidence/
 # 逆向工具链（体积大，不入库）；但保留 tools/ 下的自研脚本
 tools/*
 !tools/*.py
+!tools/集成验证/
 *.dex
 *.apk
 *.so

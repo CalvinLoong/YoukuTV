@@ -131,19 +131,27 @@ final class YoukuMTopClientTests: XCTestCase {
     }
 
     func testWriteMasterPlaylistNormalizesNewlines() {
-        // 实测 ups 的 auto 流里 m3u8_url 装的是清单**内容**，换行是字面量 "\n"
-        let content = "#EXTM3U\\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1920x1080\\nhttp://a/b.m3u8\\n#EXT-X-ENDLIST"
-        guard let url = YoukuUpsClient.writeMasterPlaylist(content, vid: "XTEST") else {
-            XCTFail("写入失败")
-            return
-        }
-        defer { try? FileManager.default.removeItem(at: url) }
+        // 实测 ups 的 auto 流里 m3u8_url 装的是清单**内容**。
+        // 注意：JSONSerialization 之后换行已经是**真实 CR/LF 字符**
+        // （不是字面量反斜杠 n），但仍要覆盖「双重转义」的兜底分支。
+        let literal = "#EXTM3U\\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1920x1080\\nhttp://a/b.m3u8\\n#EXT-X-ENDLIST"
+        let real = "#EXTM3U\r\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1920x1080\r\nhttp://a/b.m3u8\r\n#EXT-X-ENDLIST"
+        for content in [literal, real] {
+            guard let url = YoukuUpsClient.writeMasterPlaylist(content, vid: "XTEST") else {
+                XCTFail("写入失败")
+                return
+            }
+            defer { try? FileManager.default.removeItem(at: url) }
 
-        let written = try? String(contentsOf: url, encoding: .utf8)
-        XCTAssertNotNil(written)
-        XCTAssertTrue(written?.contains("\n") == true)
-        XCTAssertFalse(written?.contains("\\n") == true)
-        XCTAssertTrue(written?.contains("1920x1080") == true)
+            let written = try? String(contentsOf: url, encoding: .utf8)
+            XCTAssertNotNil(written)
+            XCTAssertTrue(written?.contains("\n") == true)
+            XCTAssertFalse(written?.contains("\\n") == true)
+            XCTAssertTrue(written?.contains("1920x1080") == true)
+            // 变体 URI 必须是独立的一行，AVPlayer 才能解析主播放列表
+            let lines = (written ?? "").components(separatedBy: .newlines)
+            XCTAssertTrue(lines.contains { $0.hasPrefix("http") })
+        }
     }
 
     func testDefaultPlaybackHeadersIncludeReferer() {
@@ -164,5 +172,99 @@ final class YoukuMTopClientTests: XCTestCase {
         // 内置 ckey / utid 必须存在，否则取不到播放地址
         XCTAssertFalse(YoukuUpsClient.builtin.ckey.isEmpty)
         XCTAssertFalse(YoukuUpsClient.builtin.utid.isEmpty)
+    }
+
+    // MARK: - 第 16 章新增：编码 / SSR / 历史
+
+    /// 回归：`URLComponents.queryItems` 不做完整百分号编码，
+    /// 裸 `+` 会被 mtop 服务端当空格 → FAIL_SYS_ILLEGAL_ACCESS。
+    func testMTopQueryStrictPercentEncoding() {
+        // 裸 + 必须变成 %2B
+        XCTAssertEqual(MTopQuery.encode("a+b"), "a%2Bb")
+        // 空格必须是 %20，不能是 +
+        XCTAssertEqual(MTopQuery.encode("a b"), "a%20b")
+        // 保留字符全部转义（RFC 3986 unreserved 集 = 字母数字 + -._~）
+        XCTAssertEqual(MTopQuery.encode("a/b=c&d"), "a%2Fb%3Dc%26d")
+        // unreserved 集里的字符不转义
+        XCTAssertEqual(MTopQuery.encode("a-b._~"), "a-b._~")
+        // 完整查询串里不能出现裸 +
+        let query = MTopQuery.make([("data", "x+y"), ("api", "a/b")])
+        XCTAssertFalse(query.contains("+"))
+        XCTAssertTrue(query.contains("%2B"))
+        XCTAssertTrue(query.contains("%2F"))
+    }
+
+    /// 回归：JSONP 响应必须**先剥包装再解析**。
+    /// 早期版本顺序反了 → 100% 抛「解析失败」。
+    func testJSONPStripThenParse() {
+        let body = "mtopjsonp1({\"ret\":[\"SUCCESS::调用成功\"],\"data\":{\"enc\":0}})"
+        XCTAssertNotNil(YoukuUpsClient.stripJSONP(body))
+
+        // 顺序反了必然失败：裸 JSONSerialization 吃不了 JSONP
+        let raw = body.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONSerialization.jsonObject(with: raw))
+    }
+
+    /// 回归：SSR 里的 JavaScript `undefined` 必须换成 null（字符串内不动），
+    /// 括号配平必须区分字符串内外。
+    func testSSRExtraction() {
+        let html = """
+        <script>window.__INITIAL_DATA__ = {"a":"含 } 和 { 的字符串","b":undefined,"c":{"d":[1,2,3]}};</script>
+        """
+        let root = YoukuSSR.extractInitialData(html)
+        XCTAssertNotNil(root)
+        XCTAssertTrue(root?["b"] is NSNull)
+        XCTAssertEqual((root?["c"] as? [String: Any])?["d"] as? [Int] ?? [], [1, 2, 3])
+        // 字符串内的 undefined 不能被替换
+        XCTAssertEqual(root?["a"] as? String, "含 } 和 { 的字符串")
+
+        let cleaned = YoukuSSR.replacingUndefinedOutsideStrings("{\"b\":undefined,\"e\":\"undefined 不是 null\"}")
+        XCTAssertTrue(cleaned.contains("\"b\":null"))
+        XCTAssertTrue(cleaned.contains("\"undefined 不是 null\""))
+    }
+
+    /// 首页 SSR 的真实结构：navList + moduleList + previewInfo.videoId。
+    func testHomeParsing() {
+        let root: [String: Any] = [
+            "navList": [["nodeKey": "WEBTV", "title": "电视剧", "category": "电视剧"]],
+            "moduleList": [[
+                "components": [[
+                    "title": "猜你在追",
+                    "itemList": [[
+                        "title": "测试节目",
+                        "action_value": "9bbc2c96790d11e4b522",
+                        "img": "http://r1.ykimg.com/p.jpg",
+                        "previewInfo": ["videoId": "XNjU3MDkzMzMyOA=="]
+                    ]]
+                ]]
+            ]]
+        ]
+        let channels = YoukuHomeClient.parseChannels(root)
+        XCTAssertEqual(channels.count, 1)
+        XCTAssertEqual(channels.first?.id, "WEBTV")
+        XCTAssertFalse(channels.first!.isHome)
+
+        let rows = YoukuHomeClient.parseRows(root)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.title, "猜你在追")
+        // ★ 推荐项必须自带 vid，否则点开播不了
+        XCTAssertEqual(rows.first?.items.first?.videoId, "XNjU3MDkzMzMyOA==")
+        XCTAssertEqual(rows.first?.items.first?.poster, "http://r1.ykimg.com/p.jpg")
+    }
+
+    /// 观看历史：本机持久化（服务端接口被 SecurityGuard 签名墙挡住）。
+    func testHistoryStoreRoundTrip() async {
+        let store = YoukuHistoryStore()
+        await store.clear()
+        await store.record(showId: "abc123", videoId: "XVTEST", title: "测试节目",
+                           poster: "http://x/y.jpg", subtitle: "第1集",
+                           position: 120, duration: 2400)
+        let entries = await store.all()
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries.first?.title, "测试节目")
+        XCTAssertEqual(entries.first?.position, 120)
+        XCTAssertEqual(entries.first?.progress, 0.05, accuracy: 0.001)
+        await store.remove(entries[0])
+        XCTAssertTrue(await store.all().isEmpty)
     }
 }

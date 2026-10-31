@@ -207,25 +207,32 @@ actor YoukuLoginClient {
         let timestamp = String(Int(Date().timeIntervalSince1970 * 1000))
         let sign = Self.md5Hex("\(token)&\(timestamp)&\(Self.appKey)&\(payload)")
 
-        var components = URLComponents(
-            string: "https://\(Self.host)/h5/\(api)/\(Self.version)/"
-        )!
-        components.queryItems = [
-            .init(name: "jsv", value: "2.6.1"),
-            .init(name: "appKey", value: Self.appKey),
-            .init(name: "t", value: timestamp),
-            .init(name: "sign", value: sign),
-            .init(name: "api", value: api),
-            .init(name: "v", value: Self.version),
-            .init(name: "timeout", value: "20000"),
-            .init(name: "type", value: "jsonp"),
-            .init(name: "dataType", value: "jsonp"),
-            .init(name: "callback", value: "mtopjsonp1"),
-            .init(name: "data", value: payload),
-            .init(name: "ttid", value: Self.ttid)
-        ]
+        // ★ 严格百分号编码：见 MTopQuery 的注释。
+        //   登录接口的 data 恰好没含 `+`，所以之前没暴露这个坑，
+        //   但全线上统一走 MTopQuery，避免以后踩到。
+        guard let url = MTopQuery.url(
+            host: Self.host,
+            api: api,
+            version: Self.version,
+            items: [
+                ("jsv", "2.6.1"),
+                ("appKey", Self.appKey),
+                ("t", timestamp),
+                ("sign", sign),
+                ("api", api),
+                ("v", Self.version),
+                ("timeout", "20000"),
+                ("type", "jsonp"),
+                ("dataType", "jsonp"),
+                ("callback", "mtopjsonp1"),
+                ("data", payload),
+                ("ttid", Self.ttid)
+            ]
+        ) else {
+            throw YoukuError.invalidResponse
+        }
 
-        var request = URLRequest(url: components.url!)
+        var request = URLRequest(url: url)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("https://login.youku.com/", forHTTPHeaderField: "Referer")
         request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
@@ -253,15 +260,19 @@ actor YoukuLoginClient {
 
     /// 触发服务端下发 `_m_h5_tk`（签名的原料）。
     private func primeToken(api: String) async throws {
-        var components = URLComponents(
-            string: "https://\(Self.host)/h5/\(api)/\(Self.version)/"
-        )!
-        components.queryItems = [
-            .init(name: "appKey", value: Self.appKey),
-            .init(name: "api", value: api),
-            .init(name: "v", value: Self.version)
-        ]
-        var request = URLRequest(url: components.url!)
+        guard let url = MTopQuery.url(
+            host: Self.host,
+            api: api,
+            version: Self.version,
+            items: [
+                ("appKey", Self.appKey),
+                ("api", api),
+                ("v", Self.version)
+            ]
+        ) else {
+            throw YoukuError.invalidResponse
+        }
+        var request = URLRequest(url: url)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         applyCookies(to: &request)
         if let (_, response) = try? await session.data(for: request) {

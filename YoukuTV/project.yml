@@ -57,6 +57,13 @@ targets:
         TVTopShelfImage:
           TVTopShelfPrimaryImage: Top Shelf Image
           TVTopShelfPrimaryImageWide: Top Shelf Image Wide
+        # ★ tvOS 启动图声明。缺这个键 = 系统判定 App「没提供启动图」
+        #   → 进入兼容模式，整个界面被缩到屏幕 1/4，表现为「UI 比例不对」。
+        #   tvOS 不支持 launch storyboard，只能用 UILaunchImages + 资源目录里的
+        #   LaunchImage.imageset。Assets.car 里必须有 1920x1080(@1x) 与
+        #   3840x2160(@2x) 两份，@2x 的存在决定系统是否按 4K 渲染。
+        UILaunchImages:
+          - UILaunchImageName: LaunchImage
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.workbuddy.youkutv

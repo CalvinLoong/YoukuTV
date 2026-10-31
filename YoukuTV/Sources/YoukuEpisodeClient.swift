@@ -159,39 +159,15 @@ actor YoukuEpisodeClient {
 
     /// 提取页面内嵌的 `window.__INITIAL_DATA__`。
     ///
-    /// 页面里是 `window.__INITIAL_DATA__ = {...};` 形式，
-    /// 需要按括号配对截取（内容里有嵌套大括号，不能简单正则匹配）。
+    /// 页面里是 `window.__INITIAL_DATA__ = {...};` 形式，需要按括号配对截取。
+    ///
+    /// ★ 早期这里只按字符数 `{` / `}`，一旦 JSON **字符串里**出现大括号
+    ///   （优酷的 `trackInfo` 里就有）就会提前截断、解析出残缺 JSON。
+    ///   现在统一走 `YoukuSSR`，它区分字符串内外，并处理数据里的
+    ///   JavaScript `undefined`（标准 JSON 解析器会直接报错）。
     static func parseInitialData(_ html: String) throws -> [String: Any] {
-        guard let marker = html.range(of: "__INITIAL_DATA__") else {
+        guard let object = YoukuSSR.extractInitialData(html) else {
             throw YoukuError.decodingFailed("页面结构已变更")
-        }
-        // 跳过 "__INITIAL_DATA__ = " 到第一个 '{'
-        guard let brace = html[marker.upperBound...].firstIndex(of: "{") else {
-            throw YoukuError.decodingFailed("页面结构已变更")
-        }
-
-        var depth = 0
-        var endIndex: String.Index?
-        var index = brace
-        while index < html.endIndex {
-            let ch = html[index]
-            if ch == "{" { depth += 1 }
-            else if ch == "}" {
-                depth -= 1
-                if depth == 0 {
-                    endIndex = html.index(after: index)
-                    break
-                }
-            }
-            index = html.index(after: index)
-        }
-        guard let end = endIndex else {
-            throw YoukuError.decodingFailed("页面结构已变更")
-        }
-
-        let raw = String(html[brace..<end])
-        guard let object = try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else {
-            throw YoukuError.decodingFailed("页面数据结构异常")
         }
         return object
     }
