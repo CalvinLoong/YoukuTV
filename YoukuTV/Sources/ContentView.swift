@@ -70,6 +70,15 @@ struct ContentView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 30) {
+                        // 首页走兜底时的提示条 —— 区别于致命错误，
+                        // 内容照常显示，只多一行说明。
+                        if let notice = model.homeNotice {
+                            Text(notice)
+                                .font(.system(size: 16))
+                                .foregroundStyle(Palette.secondaryText)
+                                .padding(.horizontal, 40)
+                                .padding(.top, 12)
+                        }
                         ForEach(model.rows) { row in
                             PosterRow(title: row.title, items: row.items) { item in
                                 model.openDetail(item)

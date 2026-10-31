@@ -40,6 +40,8 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var isLoadingEpisodes = false
     @Published private(set) var isLoadingPlayback = false
     @Published var errorMessage: String?
+    /// 首页推荐加载失败时的提示（有兜底内容时展示，区别于致命错误）。
+    @Published private(set) var homeNotice: String?
     @Published var searchKeyword = ""
 
     /// 当前选中的频道（顶部导航）
@@ -115,6 +117,7 @@ final class AppViewModel: ObservableObject {
 
         do {
             let home = try await homeClient.loadHome()
+            homeNotice = nil
             channels = home.channels
             rows = home.rows.map {
                 Row(id: $0.id, title: $0.title, items: $0.items)
@@ -130,9 +133,12 @@ final class AppViewModel: ObservableObject {
     }
 
     /// 首页拿不到时的兜底：用搜索接口拼几行。
+    ///
+    /// 只取前 3 个分类 —— 首页失败往往意味着触发了优酷风控，
+    /// 这时再一口气发 6 个搜索请求容易继续被惩罚。
     private func loadFallbackRows() async {
         var collected: [Row] = []
-        for (title, keyword) in YoukuWebClient.hotKeywords {
+        for (title, keyword) in YoukuWebClient.hotKeywords.prefix(3) {
             guard let items = try? await web.search(keyword: keyword, page: 1),
                   !items.isEmpty else { continue }
             collected.append(Row(id: keyword, title: title, items: items))
@@ -142,6 +148,9 @@ final class AppViewModel: ObservableObject {
         } else {
             rows = collected
             prependHistoryRow()
+            // 首页没拿到但兜底成功了 —— 明确告诉用户现在看到的是什么，
+            // 别让人以为这就是优酷首页的推荐位。
+            homeNotice = "首页推荐暂时加载失败（优酷风控），已切换到热门分类兜底"
         }
     }
 
