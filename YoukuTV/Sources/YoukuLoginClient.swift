@@ -179,12 +179,21 @@ actor YoukuLoginClient {
             guard let returnValue = payload["returnValue"] as? [String: Any] else {
                 throw YoukuError.decodingFailed("登录成功但未返回凭据")
             }
+            lastReturnValue = returnValue
             return .success(YoukuCredentials.parse(returnValue))
         default:
             let message = payload["message"] as? String ?? "未知状态 \(code)"
             throw YoukuError.mtop("扫码登录失败：\(message)")
         }
     }
+
+    /// 登录成功时服务端返回的原始 `returnValue`。
+    ///
+    /// 用途：凭据解析一旦对不上结构，用它对照真实结构，
+    /// 不用再抓包重跑。App 里用不到，是给联调工具用的。
+    private var lastReturnValue: [String: Any]?
+
+    func lastRawReturnValue() -> [String: Any]? { lastReturnValue }
 
     // MARK: - 协议实现
 
@@ -397,50 +406,95 @@ struct YoukuCredentials: Codable, Equatable {
 
     /// 从 Havana 的 `returnValue` 解析凭据。
     ///
-    /// 结构（逆向自 `HavanaDataHelper.processLoginReturnData`）：
+    /// ## 真实结构（逆向自 `HavanaDataHelper.processLoginReturnData`，
+    /// `/tmp/km/jd/classes2/sources/com/youku/passport/utils/HavanaDataHelper.java:38`）
+    ///
+    /// 关键点：**`returnValue.data` 本身是一个 JSON 字符串**，不是对象。
+    /// 整条链是**三重字符串套壳**，必须 parse 三次：
+    ///
     /// ```
-    /// returnValue.data.loginServiceExt   → JSON 字符串
-    ///   → .youkuExt                      → JSON 字符串
-    ///     → .content                     → JSON
-    ///       → .sessionInfo.ptoken / .loginAppId / .cookieExpireTime
-    ///       → .userInfo.yktk / .ytid / .nickname / .avatar
+    /// returnValue                          ← LoginReturnData 对象
+    /// └─ data                             ← ★ String！内容是 JSON 文本
+    ///    └─ (parse 1) AliUserResponseData
+    ///       ├─ loginServiceExt            ← Map<String,String>（对象，不是字符串）
+    ///       │  └─ youkuExt                ← ★ String！内容是 JSON 文本
+    ///       │     └─ (parse 2)
+    ///       │        └─ content            ← ★ String！内容是 JSON 文本
+    ///       │           └─ (parse 3)
+    ///       │              ├─ sessionInfo  → ptoken / loginAppId / cookieExpireTime
+    ///       │              └─ userInfo     → yktk / ytid / nickname / avatar
     /// ```
+    ///
+    /// 字段归属：
+    /// - `sessionInfo.ptoken`、`sessionInfo.loginAppId`、`sessionInfo.cookieExpireTime`
+    /// - `userInfo.yktk`、`userInfo.ytid`、`userInfo.nickname`、`userInfo.avatar`
+    ///
+    /// 注意 `cookieExpireTime` 是**秒级** epoch。
     static func parse(_ returnValue: [String: Any]) -> YoukuCredentials {
-        // 有的版本把内容放在 returnValue.data，有的直接放在 returnValue。
-        let root = (returnValue["data"] as? [String: Any]) ?? returnValue
+        // 第 0 层：returnValue.data 是字符串，parse 一次
+        var root: [String: Any] = [:]
+        if let dataString = returnValue["data"] as? String {
+            root = (Self.jsonObject(dataString)) ?? [:]
+        } else if let dataObject = returnValue["data"] as? [String: Any] {
+            root = dataObject
+        } else {
+            root = returnValue
+        }
 
-        var content: [String: Any] = [:]
-
-        if let serviceExt = root["loginServiceExt"] as? String,
-           let serviceDict = try? JSONSerialization.jsonObject(
-               with: Data(serviceExt.utf8)
-           ) as? [String: Any] {
-            if let youkuExt = serviceDict["youkuExt"] as? String,
-               let youkuDict = try? JSONSerialization.jsonObject(
-                   with: Data(youkuExt.utf8)
-               ) as? [String: Any] {
-                content = (youkuDict["content"] as? [String: Any]) ?? [:]
-            } else if let direct = serviceDict["content"] as? [String: Any] {
-                content = direct
+        // 第 1 层：loginServiceExt 是对象；youkuExt 是字符串
+        var youkuExt: [String: Any] = [:]
+        if let serviceExt = root["loginServiceExt"] as? [String: Any] {
+            if let raw = serviceExt["youkuExt"] as? String {
+                youkuExt = Self.jsonObject(raw) ?? [:]
+            } else if let obj = serviceExt["youkuExt"] as? [String: Any] {
+                youkuExt = obj
+            }
+        } else if let serviceExtString = root["loginServiceExt"] as? String,
+                  let serviceDict = Self.jsonObject(serviceExtString) {
+            if let raw = serviceDict["youkuExt"] as? String {
+                youkuExt = Self.jsonObject(raw) ?? [:]
+            } else if let obj = serviceDict["youkuExt"] as? [String: Any] {
+                youkuExt = obj
             }
         }
 
-        // 兜底：内容直接就在根上
+        // 第 2 层：content 是字符串
+        var content: [String: Any] = [:]
+        if let raw = youkuExt["content"] as? String {
+            content = Self.jsonObject(raw) ?? [:]
+        } else if let obj = youkuExt["content"] as? [String: Any] {
+            content = obj
+        }
+
+        // 兜底：某些版本少一层
         if content.isEmpty {
-            content = (root["content"] as? [String: Any]) ?? root
+            content = youkuExt
+        }
+        if content.isEmpty {
+            content = root
         }
 
         let session = (content["sessionInfo"] as? [String: Any]) ?? [:]
         let user = (content["userInfo"] as? [String: Any]) ?? [:]
 
         return YoukuCredentials(
-            ytid: user["ytid"] as? String ?? (root["ytid"] as? String ?? ""),
-            ptoken: session["ptoken"] as? String ?? (root["ptoken"] as? String ?? ""),
+            ytid: user["ytid"] as? String
+                ?? (root["ytid"] as? String ?? ""),
+            ptoken: session["ptoken"] as? String
+                ?? (root["ptoken"] as? String ?? ""),
             loginAppId: session["loginAppId"] as? String ?? "",
-            yktk: user["yktk"] as? String ?? (root["yktk"] as? String ?? ""),
+            yktk: user["yktk"] as? String
+                ?? (root["yktk"] as? String ?? ""),
             nickname: user["nickname"] as? String ?? "",
-            avatarUrl: user["avatar"] as? String ?? (user["avatarUrl"] as? String ?? ""),
-            cookieExpireTime: session["cookieExpireTime"] as? Int ?? 0
+            avatarUrl: user["avatar"] as? String
+                ?? (user["avatarUrl"] as? String ?? ""),
+            cookieExpireTime: YoukuLoginClient.intValue(session["cookieExpireTime"])
         )
+    }
+
+    /// 解析 JSON 文本为字典。
+    private static func jsonObject(_ text: String) -> [String: Any]? {
+        guard let data = text.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 }
