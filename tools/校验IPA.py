@@ -81,6 +81,26 @@ def main():
         print(f"    CFBundleDisplayName = {plist.get('CFBundleDisplayName')}")
         print(f"    TVTopShelfImage = {plist.get('TVTopShelfImage')}")
 
+        # 9) ★ UILaunchImages —— tvOS 缩放异常的根因
+        #
+        # 缺这个键 = 系统判定「App 没提供启动图」→ 进入兼容模式，
+        # 整个界面被缩到屏幕 1/4，表现为「UI 比例不对」。
+        # 这项必须在校验里断言，不能等到用户装到电视上才发现。
+        launch = plist.get("UILaunchImages")
+        if not launch:
+            fail("Info.plist 缺少 UILaunchImages —— tvOS 会进入兼容模式，界面缩到 1/4")
+        names = []
+        for entry in launch:
+            if isinstance(entry, dict):
+                n = entry.get("UILaunchImageName")
+            else:
+                n = entry
+            if n:
+                names.append(n)
+        if not names:
+            fail("UILaunchImages 里没有任何 UILaunchImageName")
+        print(f"  ✓ UILaunchImages 齐全（{names}）—— tvOS 不会进兼容模式")
+
         assets_size = z.getinfo(f"Payload/{app}.app/Assets.car").file_size
         print(f"  ✓ Assets.car 大小 {assets_size} 字节")
         if assets_size < 10000:

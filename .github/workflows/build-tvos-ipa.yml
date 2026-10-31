@@ -351,7 +351,19 @@ jobs:
                   if not icon:
                       print("  ✗ Info.plist 缺图标键")
                       sys.exit(1)
-                  print(f"  ✓ 通过（{len(names)} 条目，图标={icon}）")
+                  # ★ UILaunchImages —— tvOS 界面缩到 1/4 的根因
+                  #   缺这个键 = 系统判定 App 没提供启动图 → 进入兼容模式。
+                  #   必须在 CI 就拦下来，不能等用户装到电视上才发现。
+                  launch = pl.get("UILaunchImages")
+                  if not launch:
+                      print("  ✗ Info.plist 缺 UILaunchImages（tvOS 会进兼容模式，界面缩到 1/4）")
+                      sys.exit(1)
+                  lnames = [e.get("UILaunchImageName") for e in launch
+                            if isinstance(e, dict) and e.get("UILaunchImageName")]
+                  if not lnames:
+                      print("  ✗ UILaunchImages 里没有 UILaunchImageName")
+                      sys.exit(1)
+                  print(f"  ✓ 通过（{len(names)} 条目，图标={icon}，启动图={lnames}）")
           except SystemExit:
               raise
           except Exception as e:
