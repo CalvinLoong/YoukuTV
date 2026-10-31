@@ -42,6 +42,13 @@
 		<key>TVTopShelfPrimaryImageWide</key>
 		<string>Top Shelf Image Wide</string>
 	</dict>
+	<key>UILaunchImages</key>
+	<array>
+		<dict>
+			<key>UILaunchImageName</key>
+			<string>LaunchImage</string>
+		</dict>
+	</array>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arm64</string>
